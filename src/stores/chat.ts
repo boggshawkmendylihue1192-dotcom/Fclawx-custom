@@ -116,6 +116,8 @@ const _sessionRunStateCache = new Map<string, SessionRunState>();
 const SESSION_LOAD_MIN_INTERVAL_MS = 1_200;
 const HISTORY_LOAD_MIN_INTERVAL_MS = 800;
 const HISTORY_POLL_SILENCE_WINDOW_MS = 2_500;
+const HISTORY_POLL_START_DELAY_MS = 1_200;
+const HISTORY_POLL_INTERVAL_MS = 2_500;
 const CHAT_EVENT_DEDUPE_TTL_MS = 30_000;
 const HISTORY_PAGE_SIZE = 200;
 const HISTORY_MAX_RENDERED_MESSAGES = 1_000;
@@ -330,6 +332,31 @@ function clearHistoryPoll(): void {
     clearTimeout(_historyPollTimer);
     _historyPollTimer = null;
   }
+}
+
+function startActiveHistoryPoll(
+  get: () => ChatState,
+  delayMs = HISTORY_POLL_START_DELAY_MS,
+): void {
+  if (_historyPollTimer) return;
+
+  const pollHistory = () => {
+    _historyPollTimer = null;
+    const state = get();
+    if (!state.sending) return;
+    if (state.streamingMessage) {
+      startActiveHistoryPoll(get, HISTORY_POLL_INTERVAL_MS);
+      return;
+    }
+    if (Date.now() - _lastChatEventAt < HISTORY_POLL_SILENCE_WINDOW_MS) {
+      startActiveHistoryPoll(get, HISTORY_POLL_INTERVAL_MS);
+      return;
+    }
+    void state.loadHistory(true);
+    startActiveHistoryPoll(get, HISTORY_POLL_INTERVAL_MS);
+  };
+
+  _historyPollTimer = setTimeout(pollHistory, delayMs);
 }
 
 function forceNextHistoryLoad(sessionKey: string): void {
@@ -3198,23 +3225,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     clearHistoryPoll();
     clearErrorRecoveryTimer();
 
-    const POLL_START_DELAY = 3_000;
-    const POLL_INTERVAL = 4_000;
-    const pollHistory = () => {
-      const state = get();
-      if (!state.sending) { clearHistoryPoll(); return; }
-      if (state.streamingMessage) {
-        _historyPollTimer = setTimeout(pollHistory, POLL_INTERVAL);
-        return;
-      }
-      if (Date.now() - _lastChatEventAt < HISTORY_POLL_SILENCE_WINDOW_MS) {
-        _historyPollTimer = setTimeout(pollHistory, POLL_INTERVAL);
-        return;
-      }
-      state.loadHistory(true);
-      _historyPollTimer = setTimeout(pollHistory, POLL_INTERVAL);
-    };
-    _historyPollTimer = setTimeout(pollHistory, POLL_START_DELAY);
+    startActiveHistoryPoll(get);
 
     const checkStuck = () => {
       const state = get();
@@ -3575,6 +3586,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 streamingTools: updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools,
               };
             });
+            startActiveHistoryPoll(get);
             break;
           }
           // Mixed `[thinking, text, toolCall]` messages with stop_reason="tool_use"
@@ -3700,11 +3712,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
               forceNextHistoryLoad(sessionKeyAtFinal);
               void get().loadHistory(true);
             }, 1500);
+          } else {
+            startActiveHistoryPoll(get);
           }
         } else {
           // No message in final event - reload history to get complete data
           set({ streamingText: '', streamingMessage: null, pendingFinal: true });
-          get().loadHistory();
+          void get().loadHistory();
+          startActiveHistoryPoll(get);
         }
         break;
       }
