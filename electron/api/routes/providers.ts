@@ -143,7 +143,7 @@ export async function handleProviderRoutes(
         accountId?: string;
         label?: string;
       }>(req);
-      if (body.provider === 'openai') {
+      if (body.provider === 'openai' || body.provider === 'xai') {
         await browserOAuthManager.startFlow(body.provider, {
           accountId: body.accountId,
           label: body.label,
@@ -254,8 +254,8 @@ export async function handleProviderRoutes(
     const accountId = decodeURIComponent(url.pathname.slice('/api/provider-accounts/'.length));
     try {
       const existing = await providerService.getAccount(accountId);
-      const runtimeProviderKey = existing?.authMode === 'oauth_browser' && existing.vendorId === 'openai'
-        ? 'openai-codex'
+      const runtimeProviderKey = existing?.authMode === 'oauth_browser'
+        ? (existing.vendorId === 'openai' ? 'openai-codex' : existing.vendorId === 'xai' ? 'xai' : undefined)
         : undefined;
       if (url.searchParams.get('apiKeyOnly') === '1') {
         await providerService._deleteProviderApiKeyInternal(accountId);
@@ -336,7 +336,7 @@ export async function handleProviderRoutes(
         accountId?: string;
         label?: string;
       }>(req);
-      if (body.provider === 'openai') {
+      if (body.provider === 'openai' || body.provider === 'xai') {
         await browserOAuthManager.startFlow(body.provider, {
           accountId: body.accountId,
           label: body.label,

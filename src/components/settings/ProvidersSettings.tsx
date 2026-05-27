@@ -1260,7 +1260,7 @@ function AddProviderDialog({
 
     try {
       // Validate key first if the provider requires one and a key was entered
-      const requiresKey = typeInfo?.requiresApiKey ?? false;
+      const requiresKey = (typeInfo?.requiresApiKey ?? false) && !useOAuthFlow;
       const normalizedApiKey = normalizeProviderApiKeyInput(apiKey);
       if (requiresKey && !normalizedApiKey) {
         setValidationError(t('aiProviders.toast.invalidKey')); // reusing invalid key msg or should add 'required' msg? null checks

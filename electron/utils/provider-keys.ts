@@ -4,11 +4,13 @@ export const OPENCLAW_PROVIDER_KEY_MINIMAX = 'minimax-portal';
 export const OPENCLAW_PROVIDER_KEY_MOONSHOT = 'moonshot';
 export const OPENCLAW_PROVIDER_KEY_MOONSHOT_GLOBAL = 'moonshot-global';
 export const OPENAI_CODEX_RUNTIME_PROVIDER_KEY = 'openai-codex';
+export const XAI_RUNTIME_PROVIDER_KEY = 'xai';
 export const CLAWX_OPENAI_IMAGE_PROVIDER_KEY = 'clawx-openai-image';
 export const OAUTH_PROVIDER_TYPES = ['minimax-portal', 'minimax-portal-cn'] as const;
 export const OPENCLAW_OAUTH_PLUGIN_PROVIDER_KEYS = [
   OPENCLAW_PROVIDER_KEY_MINIMAX,
   OPENAI_CODEX_RUNTIME_PROVIDER_KEY,
+  XAI_RUNTIME_PROVIDER_KEY,
 ] as const;
 
 const OAUTH_PROVIDER_TYPE_SET = new Set<string>(OAUTH_PROVIDER_TYPES);
@@ -50,6 +52,9 @@ export function resolveOpenClawProviderKey(account: {
 }): string {
   if (account.authMode === 'oauth_browser' && account.vendorId === 'openai') {
     return OPENAI_CODEX_RUNTIME_PROVIDER_KEY;
+  }
+  if (account.authMode === 'oauth_browser' && account.vendorId === 'xai') {
+    return XAI_RUNTIME_PROVIDER_KEY;
   }
   return getOpenClawProviderKeyForType(account.vendorId, account.id);
 }

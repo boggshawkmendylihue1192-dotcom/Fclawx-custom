@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { BrowserWindow, shell } from 'electron';
 import { logger } from './logger';
 import { loginOpenAICodexOAuth, type OpenAICodexOAuthCredentials } from './openai-codex-oauth';
+import { loginXAiOAuth, type XAiOAuthCredentials } from './xai-oauth';
 import { getProviderService } from '../services/providers/provider-service';
 import { getSecretStore } from '../services/secrets/secret-store';
 import {
@@ -10,15 +11,37 @@ import {
   setOpenClawDefaultModel,
 } from './openclaw-auth';
 
-// Google was removed: OpenClaw's `google-gemini-cli` OAuth integration is an
-// unofficial third-party flow that requires the `gemini` CLI binary to be on
-// PATH and ships with explicit "use at your own risk" warnings about Google
-// account suspensions. ClawX does not bundle that binary, so the only
-// browser-OAuth provider we currently expose end-to-end is OpenAI Codex.
-export type BrowserOAuthProviderType = 'openai';
+export type BrowserOAuthProviderType = 'openai' | 'xai';
 
 const OPENAI_RUNTIME_PROVIDER_ID = 'openai-codex';
 const OPENAI_OAUTH_DEFAULT_MODEL = 'gpt-5.5';
+const XAI_RUNTIME_PROVIDER_ID = 'xai';
+const XAI_OAUTH_DEFAULT_MODEL = 'grok-4.3';
+
+type BrowserOAuthCredentials = OpenAICodexOAuthCredentials | XAiOAuthCredentials;
+
+function getBrowserOAuthProviderConfig(provider: BrowserOAuthProviderType): {
+  runtimeProviderId: string;
+  defaultModel: string;
+  label: string;
+  manualProviderLabel: string;
+} {
+  if (provider === 'xai') {
+    return {
+      runtimeProviderId: XAI_RUNTIME_PROVIDER_ID,
+      defaultModel: XAI_OAUTH_DEFAULT_MODEL,
+      label: 'xAI',
+      manualProviderLabel: 'xAI',
+    };
+  }
+
+  return {
+    runtimeProviderId: OPENAI_RUNTIME_PROVIDER_ID,
+    defaultModel: OPENAI_OAUTH_DEFAULT_MODEL,
+    label: 'OpenAI Codex',
+    manualProviderLabel: 'OpenAI',
+  };
+}
 
 class BrowserOAuthManager extends EventEmitter {
   private activeProvider: BrowserOAuthProviderType | null = null;
@@ -54,15 +77,17 @@ class BrowserOAuthManager extends EventEmitter {
 
   private async executeFlow(provider: BrowserOAuthProviderType): Promise<void> {
     try {
-      const token = await loginOpenAICodexOAuth({
+      const providerConfig = getBrowserOAuthProviderConfig(provider);
+      const token = await (provider === 'xai' ? loginXAiOAuth : loginOpenAICodexOAuth)({
         openUrl: async (url) => {
           await shell.openExternal(url);
         },
         onProgress: (message) => logger.info(`[BrowserOAuth] ${message}`),
         onManualCodeRequired: ({ authorizationUrl, reason }) => {
+          const port = provider === 'xai' ? '56121' : '1455';
           const message = reason === 'port_in_use'
-            ? 'OpenAI OAuth callback port 1455 is in use. Complete sign-in, then paste the final callback URL or code.'
-            : 'OpenAI OAuth callback timed out. Paste the final callback URL or code to continue.';
+            ? `${providerConfig.manualProviderLabel} OAuth callback port ${port} is in use. Complete sign-in, then paste the final callback URL or code.`
+            : `${providerConfig.manualProviderLabel} OAuth callback timed out. Paste the final callback URL or code to continue.`;
           const payload = {
             provider,
             mode: 'manual' as const,
@@ -124,7 +149,7 @@ class BrowserOAuthManager extends EventEmitter {
 
   private async onSuccess(
     providerType: BrowserOAuthProviderType,
-    token: OpenAICodexOAuthCredentials,
+    token: BrowserOAuthCredentials,
   ) {
     const accountId = this.activeAccountId || providerType;
     const accountLabel = this.activeLabel;
@@ -138,18 +163,19 @@ class BrowserOAuthManager extends EventEmitter {
 
     const providerService = getProviderService();
     const existing = await providerService.getAccount(accountId);
-    const runtimeProviderId = OPENAI_RUNTIME_PROVIDER_ID;
-    const defaultModel = OPENAI_OAUTH_DEFAULT_MODEL;
-    const accountLabelDefault = 'OpenAI Codex';
+    const providerConfig = getBrowserOAuthProviderConfig(providerType);
+    const runtimeProviderId = providerConfig.runtimeProviderId;
+    const defaultModel = providerConfig.defaultModel;
+    const accountLabelDefault = providerConfig.label;
     const oauthTokenEmail = typeof token.email === 'string' ? token.email : undefined;
     const oauthTokenSubject = typeof token.accountId === 'string' ? token.accountId : undefined;
 
-    // OpenAI OAuth uses openai-codex/* runtime; existing openai/* refs are incompatible.
+    // Browser OAuth may use a different runtime key than the UI vendor id.
     const normalizedExistingModel = (() => {
       const value = existing?.model?.trim();
       if (!value) return undefined;
-      if (value.startsWith('openai/')) return undefined;
-      if (value.startsWith('openai-codex/')) return value.split('/').pop();
+      if (value.startsWith(`${providerType}/`) && providerType !== runtimeProviderId) return undefined;
+      if (value.startsWith(`${runtimeProviderId}/`)) return value.split('/').pop();
       return value.includes('/') ? value.split('/').pop() : value;
     })();
 
@@ -168,6 +194,7 @@ class BrowserOAuthManager extends EventEmitter {
       metadata: {
         ...existing?.metadata,
         email: oauthTokenEmail,
+        displayName: 'displayName' in token ? token.displayName : undefined,
         resourceUrl: runtimeProviderId,
       },
       createdAt: existing?.createdAt || new Date().toISOString(),
@@ -208,7 +235,7 @@ class BrowserOAuthManager extends EventEmitter {
       await ensureOpenClawProviderAgentRuntimePins();
       logger.info(`[BrowserOAuth] Registered ${runtimeProviderId} in openclaw.json (default model: ${modelRef})`);
     } catch (err) {
-      logger.warn('[BrowserOAuth] Failed to register OpenAI OAuth provider in openclaw.json:', err);
+      logger.warn(`[BrowserOAuth] Failed to register ${providerType} OAuth provider in openclaw.json:`, err);
       throw err;
     }
 

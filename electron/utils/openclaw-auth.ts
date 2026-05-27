@@ -181,6 +181,12 @@ function getOAuthPluginRegistration(provider: string): OAuthPluginRegistration {
   if (provider === OPENCLAW_PROVIDER_KEY_MINIMAX) {
     return resolveMiniMaxPluginRegistration();
   }
+  if (provider === 'xai') {
+    return {
+      canonicalPluginId: 'xai',
+      stalePluginIds: [],
+    };
+  }
 
   return {
     canonicalPluginId: `${provider}-auth`,

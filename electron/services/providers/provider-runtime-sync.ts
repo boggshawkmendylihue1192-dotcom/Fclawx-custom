@@ -27,6 +27,8 @@ import { listAgentsSnapshot } from '../../utils/agent-config';
 
 const OPENAI_OAUTH_RUNTIME_PROVIDER = 'openai-codex';
 const OPENAI_OAUTH_DEFAULT_MODEL_REF = `${OPENAI_OAUTH_RUNTIME_PROVIDER}/gpt-5.5`;
+const XAI_OAUTH_RUNTIME_PROVIDER = 'xai';
+const XAI_OAUTH_DEFAULT_MODEL_REF = `${XAI_OAUTH_RUNTIME_PROVIDER}/grok-4.3`;
 
 /**
  * Provider types that are not in the built-in provider registry (no `providerConfig.api`).
@@ -102,6 +104,9 @@ async function resolveRuntimeProviderKey(config: ProviderConfig): Promise<string
   if (account?.authMode === 'oauth_browser' && config.type === 'openai') {
     return OPENAI_OAUTH_RUNTIME_PROVIDER;
   }
+  if (account?.authMode === 'oauth_browser' && config.type === 'xai') {
+    return XAI_OAUTH_RUNTIME_PROVIDER;
+  }
   return getOpenClawProviderKey(config.type, config.id);
 }
 
@@ -119,7 +124,17 @@ async function getBrowserOAuthRuntimeProvider(config: ProviderConfig): Promise<s
   if (config.type === 'openai') {
     return OPENAI_OAUTH_RUNTIME_PROVIDER;
   }
+  if (config.type === 'xai') {
+    return XAI_OAUTH_RUNTIME_PROVIDER;
+  }
   return null;
+}
+
+function getBrowserOAuthDefaultModelRef(runtimeProvider: string): string {
+  if (runtimeProvider === XAI_OAUTH_RUNTIME_PROVIDER) {
+    return XAI_OAUTH_DEFAULT_MODEL_REF;
+  }
+  return OPENAI_OAUTH_DEFAULT_MODEL_REF;
 }
 
 export function getProviderModelRef(config: ProviderConfig): string | undefined {
@@ -687,7 +702,7 @@ export async function syncDefaultProviderToRuntime(
         });
       }
 
-      const defaultModelRef = OPENAI_OAUTH_DEFAULT_MODEL_REF;
+      const defaultModelRef = getBrowserOAuthDefaultModelRef(browserOAuthRuntimeProvider);
       const modelOverride = provider.model
         ? (provider.model.startsWith(`${browserOAuthRuntimeProvider}/`)
           ? provider.model
