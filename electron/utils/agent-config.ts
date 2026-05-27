@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, readdir, rm } from 'fs/promises';
+import { access, copyFile, mkdir, readdir, readFile, rm, writeFile } from 'fs/promises';
 import { constants } from 'fs';
 import { join, normalize } from 'path';
 import { deleteAgentChannelAccounts, listConfiguredChannels, readOpenClawConfig, writeOpenClawConfig } from './channel-config';
@@ -41,6 +41,9 @@ interface AgentDefaultsConfig {
 interface AgentListEntry extends Record<string, unknown> {
   id: string;
   name?: string;
+  description?: string;
+  templateId?: string;
+  toolPermissions?: AgentToolPermissions;
   default?: boolean;
   workspace?: string;
   agentDir?: string;
@@ -81,6 +84,10 @@ interface AgentConfigDocument extends Record<string, unknown> {
 export interface AgentSummary {
   id: string;
   name: string;
+  description?: string;
+  instructions?: string;
+  templateId?: string;
+  toolPermissions: AgentToolPermissions;
   isDefault: boolean;
   modelDisplay: string;
   modelRef: string | null;
@@ -92,6 +99,22 @@ export interface AgentSummary {
   channelTypes: string[];
 }
 
+export interface AgentToolPermissions {
+  files: boolean;
+  shell: boolean;
+  browser: boolean;
+  skills: boolean;
+  memory: boolean;
+}
+
+export interface AgentProfileUpdate {
+  name?: string;
+  description?: string;
+  instructions?: string;
+  templateId?: string;
+  toolPermissions?: Partial<AgentToolPermissions>;
+}
+
 export interface AgentsSnapshot {
   agents: AgentSummary[];
   defaultAgentId: string;
@@ -100,6 +123,46 @@ export interface AgentsSnapshot {
   channelOwners: Record<string, string>;
   channelAccountOwners: Record<string, string>;
 }
+
+const DEFAULT_TOOL_PERMISSIONS: AgentToolPermissions = {
+  files: true,
+  shell: true,
+  browser: true,
+  skills: true,
+  memory: true,
+};
+
+const AGENT_TEMPLATES: Record<string, {
+  description: string;
+  instructions: string;
+  toolPermissions: AgentToolPermissions;
+}> = {
+  general: {
+    description: 'General assistant for everyday reasoning and drafting.',
+    instructions: 'You are a helpful general-purpose assistant. Be clear, practical, and concise.',
+    toolPermissions: { ...DEFAULT_TOOL_PERMISSIONS },
+  },
+  coding: {
+    description: 'Engineering agent for coding, debugging, and reviews.',
+    instructions: 'You are a senior software engineering agent. Inspect the project before changing code, keep edits scoped, run relevant checks, and explain outcomes plainly.',
+    toolPermissions: { ...DEFAULT_TOOL_PERMISSIONS },
+  },
+  research: {
+    description: 'Research agent for gathering, comparing, and summarizing information.',
+    instructions: 'You are a careful research agent. Verify claims, separate facts from inference, and summarize findings with source-aware reasoning.',
+    toolPermissions: { ...DEFAULT_TOOL_PERMISSIONS, shell: false },
+  },
+  writing: {
+    description: 'Writing agent for translation, polishing, and long-form drafting.',
+    instructions: 'You are a writing and translation agent. Preserve intent, improve structure, and adapt tone to the target audience.',
+    toolPermissions: { ...DEFAULT_TOOL_PERMISSIONS, shell: false, browser: false },
+  },
+  review: {
+    description: 'Review agent focused on risks, bugs, and missing tests.',
+    instructions: 'You are a code review agent. Lead with concrete findings ordered by severity, cite files and lines when available, and call out test gaps.',
+    toolPermissions: { ...DEFAULT_TOOL_PERMISSIONS },
+  },
+};
 
 function resolveModelRef(model: unknown): string | null {
   if (typeof model === 'string' && model.trim()) {
@@ -131,6 +194,26 @@ function normalizeAgentName(name: string): string {
   return name.trim() || 'Agent';
 }
 
+function normalizeAgentDescription(description: unknown): string {
+  return typeof description === 'string' ? description.trim() : '';
+}
+
+function normalizeTemplateId(templateId: unknown): string {
+  const candidate = typeof templateId === 'string' ? templateId.trim() : '';
+  return candidate && AGENT_TEMPLATES[candidate] ? candidate : 'general';
+}
+
+function normalizeToolPermissions(value: unknown): AgentToolPermissions {
+  const source = value && typeof value === 'object' ? value as Partial<AgentToolPermissions> : {};
+  return {
+    files: typeof source.files === 'boolean' ? source.files : DEFAULT_TOOL_PERMISSIONS.files,
+    shell: typeof source.shell === 'boolean' ? source.shell : DEFAULT_TOOL_PERMISSIONS.shell,
+    browser: typeof source.browser === 'boolean' ? source.browser : DEFAULT_TOOL_PERMISSIONS.browser,
+    skills: typeof source.skills === 'boolean' ? source.skills : DEFAULT_TOOL_PERMISSIONS.skills,
+    memory: typeof source.memory === 'boolean' ? source.memory : DEFAULT_TOOL_PERMISSIONS.memory,
+  };
+}
+
 function slugifyAgentId(name: string): string {
   const normalized = name
     .normalize('NFKD')
@@ -143,6 +226,74 @@ function slugifyAgentId(name: string): string {
   if (!normalized || /^\d+$/.test(normalized)) return 'agent';
   if (normalized === MAIN_AGENT_ID) return 'agent';
   return normalized;
+}
+
+function getAgentWorkspacePath(config: AgentConfigDocument, entry: AgentListEntry): string {
+  return expandPath(entry.workspace || (entry.id === MAIN_AGENT_ID ? getDefaultWorkspacePath(config) : `~/.openclaw/workspace-${entry.id}`));
+}
+
+function getAgentSoulPath(config: AgentConfigDocument, entry: AgentListEntry): string {
+  return join(getAgentWorkspacePath(config, entry), 'SOUL.md');
+}
+
+function getAgentToolsPath(config: AgentConfigDocument, entry: AgentListEntry): string {
+  return join(getAgentWorkspacePath(config, entry), 'TOOLS.md');
+}
+
+async function readAgentInstructions(config: AgentConfigDocument, entry: AgentListEntry): Promise<string> {
+  try {
+    return (await readFile(getAgentSoulPath(config, entry), 'utf-8')).trim();
+  } catch {
+    const templateId = normalizeTemplateId(entry.templateId);
+    return AGENT_TEMPLATES[templateId]?.instructions ?? AGENT_TEMPLATES.general.instructions;
+  }
+}
+
+function buildToolPermissionsBlock(permissions: AgentToolPermissions): string {
+  const rows = [
+    `- Files: ${permissions.files ? 'enabled' : 'disabled'}`,
+    `- Shell: ${permissions.shell ? 'enabled' : 'disabled'}`,
+    `- Browser: ${permissions.browser ? 'enabled' : 'disabled'}`,
+    `- Skills: ${permissions.skills ? 'enabled' : 'disabled'}`,
+    `- Memory: ${permissions.memory ? 'enabled' : 'disabled'}`,
+  ];
+  return [
+    '<!-- CLAWX_AGENT_TOOL_PERMISSIONS_START -->',
+    '# ClawX Tool Permissions',
+    '',
+    ...rows,
+    '',
+    'Follow these permissions when deciding whether to use tools for this agent.',
+    '<!-- CLAWX_AGENT_TOOL_PERMISSIONS_END -->',
+  ].join('\n');
+}
+
+function mergeManagedBlock(content: string, block: string): string {
+  const pattern = /<!-- CLAWX_AGENT_TOOL_PERMISSIONS_START -->[\s\S]*?<!-- CLAWX_AGENT_TOOL_PERMISSIONS_END -->/;
+  if (pattern.test(content)) {
+    return content.replace(pattern, block);
+  }
+  return `${content.trim()}\n\n${block}\n`;
+}
+
+async function writeAgentInstructions(config: AgentConfigDocument, entry: AgentListEntry, instructions: string): Promise<void> {
+  const workspace = getAgentWorkspacePath(config, entry);
+  await ensureDir(workspace);
+  await writeFile(getAgentSoulPath(config, entry), `${instructions.trim() || AGENT_TEMPLATES.general.instructions}\n`, 'utf-8');
+}
+
+async function writeAgentToolPermissions(config: AgentConfigDocument, entry: AgentListEntry): Promise<void> {
+  const workspace = getAgentWorkspacePath(config, entry);
+  await ensureDir(workspace);
+  const toolsPath = getAgentToolsPath(config, entry);
+  let existing = '';
+  try {
+    existing = await readFile(toolsPath, 'utf-8');
+  } catch {
+    existing = '# Tools\n';
+  }
+  const permissions = normalizeToolPermissions(entry.toolPermissions);
+  await writeFile(toolsPath, mergeManagedBlock(existing, buildToolPermissionsBlock(permissions)), 'utf-8');
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -509,7 +660,7 @@ async function buildSnapshotFromConfig(config: AgentConfigDocument, preloadedCha
   const defaultModelConfig = (config.agents as AgentsConfig | undefined)?.defaults?.model;
   const defaultModelLabel = formatModelLabel(defaultModelConfig);
   const defaultModelRef = resolveModelRef(defaultModelConfig);
-  const agents: AgentSummary[] = entries.map((entry) => {
+  const agents: AgentSummary[] = await Promise.all(entries.map(async (entry) => {
     const explicitModelRef = resolveModelRef(entry.model);
     const modelLabel = formatModelLabel(entry.model) || defaultModelLabel || 'Not configured';
     const inheritedModel = !explicitModelRef && Boolean(defaultModelLabel);
@@ -518,6 +669,10 @@ async function buildSnapshotFromConfig(config: AgentConfigDocument, preloadedCha
     return {
       id: entry.id,
       name: entry.name || (entry.id === MAIN_AGENT_ID ? MAIN_AGENT_NAME : entry.id),
+      description: normalizeAgentDescription(entry.description),
+      instructions: await readAgentInstructions(config, entry),
+      templateId: normalizeTemplateId(entry.templateId),
+      toolPermissions: normalizeToolPermissions(entry.toolPermissions),
       isDefault: entry.id === defaultAgentId,
       modelDisplay: modelLabel,
       modelRef: explicitModelRef || defaultModelRef || null,
@@ -530,7 +685,7 @@ async function buildSnapshotFromConfig(config: AgentConfigDocument, preloadedCha
         .filter((ct) => ownedChannels.has(ct))
         .map((channelType) => toUiChannelType(channelType)),
     };
-  });
+  }));
 
   return {
     agents,
@@ -579,7 +734,13 @@ export async function resolveAgentIdFromChannel(channel: string, accountId?: str
 
 export async function createAgent(
   name: string,
-  options?: { inheritWorkspace?: boolean },
+  options?: {
+    inheritWorkspace?: boolean;
+    templateId?: string;
+    description?: string;
+    instructions?: string;
+    toolPermissions?: Partial<AgentToolPermissions>;
+  },
 ): Promise<AgentsSnapshot> {
   return withConfigLock(async () => {
     const config = await readOpenClawConfig() as AgentConfigDocument;
@@ -599,6 +760,9 @@ export async function createAgent(
     const newAgent: AgentListEntry = {
       id: nextId,
       name: normalizedName,
+      description: normalizeAgentDescription(options?.description || AGENT_TEMPLATES[normalizeTemplateId(options?.templateId)]?.description),
+      templateId: normalizeTemplateId(options?.templateId),
+      toolPermissions: normalizeToolPermissions(options?.toolPermissions || AGENT_TEMPLATES[normalizeTemplateId(options?.templateId)]?.toolPermissions),
       workspace: `~/.openclaw/workspace-${nextId}`,
       agentDir: getDefaultAgentDirPath(nextId),
     };
@@ -614,6 +778,12 @@ export async function createAgent(
     };
 
     await provisionAgentFilesystem(config, newAgent, { inheritWorkspace: options?.inheritWorkspace });
+    await writeAgentInstructions(
+      config,
+      newAgent,
+      options?.instructions || AGENT_TEMPLATES[newAgent.templateId || 'general']?.instructions || AGENT_TEMPLATES.general.instructions,
+    );
+    await writeAgentToolPermissions(config, newAgent);
     await writeOpenClawConfig(config);
     logger.info('Created agent config entry', { agentId: nextId, inheritWorkspace: !!options?.inheritWorkspace });
     return buildSnapshotFromConfig(config);
@@ -642,6 +812,52 @@ export async function updateAgentName(agentId: string, name: string): Promise<Ag
 
     await writeOpenClawConfig(config);
     logger.info('Updated agent name', { agentId, name: normalizedName });
+    return buildSnapshotFromConfig(config);
+  });
+}
+
+export async function updateAgentProfile(agentId: string, update: AgentProfileUpdate): Promise<AgentsSnapshot> {
+  return withConfigLock(async () => {
+    const config = await readOpenClawConfig() as AgentConfigDocument;
+    const { agentsConfig, entries } = normalizeAgentsConfig(config);
+    const index = entries.findIndex((entry) => entry.id === agentId);
+    if (index === -1) {
+      throw new Error(`Agent "${agentId}" not found`);
+    }
+
+    const currentEntry = entries[index];
+    const templateId = update.templateId !== undefined
+      ? normalizeTemplateId(update.templateId)
+      : normalizeTemplateId(currentEntry.templateId);
+    const template = AGENT_TEMPLATES[templateId] ?? AGENT_TEMPLATES.general;
+    const nextEntry: AgentListEntry = {
+      ...currentEntry,
+      templateId,
+      description: update.description !== undefined
+        ? normalizeAgentDescription(update.description)
+        : normalizeAgentDescription(currentEntry.description || template.description),
+      toolPermissions: normalizeToolPermissions({
+        ...normalizeToolPermissions(currentEntry.toolPermissions || template.toolPermissions),
+        ...(update.toolPermissions || {}),
+      }),
+    };
+
+    if (typeof update.name === 'string' && !nextEntry.default) {
+      nextEntry.name = normalizeAgentName(update.name);
+    }
+
+    entries[index] = nextEntry;
+    config.agents = {
+      ...agentsConfig,
+      list: entries,
+    };
+
+    if (typeof update.instructions === 'string') {
+      await writeAgentInstructions(config, nextEntry, update.instructions);
+    }
+    await writeAgentToolPermissions(config, nextEntry);
+    await writeOpenClawConfig(config);
+    logger.info('Updated agent profile', { agentId, templateId });
     return buildSnapshotFromConfig(config);
   });
 }

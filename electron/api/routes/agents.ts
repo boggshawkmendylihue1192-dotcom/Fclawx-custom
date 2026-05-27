@@ -9,6 +9,8 @@ import {
   resolveAccountIdForAgent,
   updateAgentModel,
   updateAgentName,
+  updateAgentProfile,
+  type AgentToolPermissions,
 } from '../../utils/agent-config';
 import { deleteChannelAccountConfig } from '../../utils/channel-config';
 import { syncAgentModelOverrideToRuntime, syncAllProviderAuthToRuntime } from '../../services/providers/provider-runtime-sync';
@@ -119,8 +121,21 @@ export async function handleAgentRoutes(
 
   if (url.pathname === '/api/agents' && req.method === 'POST') {
     try {
-      const body = await parseJsonBody<{ name: string; inheritWorkspace?: boolean }>(req);
-      const snapshot = await createAgent(body.name, { inheritWorkspace: body.inheritWorkspace });
+      const body = await parseJsonBody<{
+        name: string;
+        inheritWorkspace?: boolean;
+        templateId?: string;
+        description?: string;
+        instructions?: string;
+        toolPermissions?: Partial<AgentToolPermissions>;
+      }>(req);
+      const snapshot = await createAgent(body.name, {
+        inheritWorkspace: body.inheritWorkspace,
+        templateId: body.templateId,
+        description: body.description,
+        instructions: body.instructions,
+        toolPermissions: body.toolPermissions,
+      });
       // Sync provider API keys to the new agent's auth-profiles.json so the
       // embedded runner can authenticate with LLM providers when messages
       // arrive via channel bots (e.g. Feishu). Without this, the copied
@@ -147,9 +162,19 @@ export async function handleAgentRoutes(
 
     if (parts.length === 1) {
       try {
-        const body = await parseJsonBody<{ name: string }>(req);
+        const body = await parseJsonBody<{
+          name?: string;
+          description?: string;
+          instructions?: string;
+          templateId?: string;
+          toolPermissions?: Partial<AgentToolPermissions>;
+        }>(req);
         const agentId = decodeURIComponent(parts[0]);
-        const snapshot = await updateAgentName(agentId, body.name);
+        const profileKeys = ['description', 'instructions', 'templateId', 'toolPermissions'] as const;
+        const hasProfileUpdate = profileKeys.some((key) => body[key] !== undefined);
+        const snapshot = hasProfileUpdate
+          ? await updateAgentProfile(agentId, body)
+          : await updateAgentName(agentId, body.name || '');
         scheduleGatewayReload(ctx, 'update-agent');
         sendJson(res, 200, { success: true, ...snapshot });
       } catch (error) {

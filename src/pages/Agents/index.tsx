@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Bot, Check, Plus, RefreshCw, Settings2, Trash2, X } from 'lucide-react';
+import { AlertCircle, Bot, Check, FileText, Plus, RefreshCw, Settings2, Trash2, Wrench, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -15,6 +15,7 @@ import { hostApiFetch } from '@/lib/host-api';
 import { subscribeHostEvent } from '@/lib/host-events';
 import { CHANNEL_ICONS, CHANNEL_NAMES, type ChannelType } from '@/types/channel';
 import type { AgentSummary } from '@/types/agent';
+import type { AgentToolPermissions } from '@/types/agent';
 import {
   buildRuntimeProviderOptions,
   splitModelRef,
@@ -48,6 +49,30 @@ interface ChannelGroupItem {
   status: 'connected' | 'connecting' | 'disconnected' | 'error';
   accounts: ChannelAccountItem[];
 }
+
+const AGENT_TEMPLATE_OPTIONS = [
+  { id: 'general', label: 'General', description: 'Daily assistant with balanced tool access.' },
+  { id: 'coding', label: 'Coding', description: 'Build, debug, review, and run checks.' },
+  { id: 'research', label: 'Research', description: 'Search, compare, and summarize findings.' },
+  { id: 'writing', label: 'Writing', description: 'Draft, translate, and polish content.' },
+  { id: 'review', label: 'Review', description: 'Find bugs, risks, and missing tests.' },
+];
+
+const TEMPLATE_INSTRUCTIONS: Record<string, string> = {
+  general: 'You are a helpful general-purpose assistant. Be clear, practical, and concise.',
+  coding: 'You are a senior software engineering agent. Inspect the project before changing code, keep edits scoped, run relevant checks, and explain outcomes plainly.',
+  research: 'You are a careful research agent. Verify claims, separate facts from inference, and summarize findings with source-aware reasoning.',
+  writing: 'You are a writing and translation agent. Preserve intent, improve structure, and adapt tone to the target audience.',
+  review: 'You are a code review agent. Lead with concrete findings ordered by severity, cite files and lines when available, and call out test gaps.',
+};
+
+const DEFAULT_TOOL_PERMISSIONS: AgentToolPermissions = {
+  files: true,
+  shell: true,
+  browser: true,
+  skills: true,
+  memory: true,
+};
 
 export function Agents() {
   const { t } = useTranslation('agents');
@@ -359,23 +384,93 @@ function ChannelLogo({ type }: { type: ChannelType }) {
   }
 }
 
+function ToolPermissionEditor({
+  value,
+  onChange,
+}: {
+  value: AgentToolPermissions;
+  onChange: (next: AgentToolPermissions) => void;
+}) {
+  const items: Array<{ key: keyof AgentToolPermissions; label: string; detail: string }> = [
+    { key: 'files', label: 'Files', detail: 'Read and write workspace files' },
+    { key: 'shell', label: 'Shell', detail: 'Run terminal commands when needed' },
+    { key: 'browser', label: 'Browser', detail: 'Open web pages for research and verification' },
+    { key: 'skills', label: 'Skills', detail: 'Use installed OpenClaw/Codex skills' },
+    { key: 'memory', label: 'Memory', detail: 'Use persistent context where available' },
+  ];
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Wrench className="h-4 w-4 text-foreground/70" />
+        <Label className={labelClasses}>Tool permissions</Label>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        {items.map((item) => (
+          <label
+            key={item.key}
+            className="flex items-center justify-between gap-3 rounded-2xl bg-black/5 dark:bg-white/5 border border-transparent p-3"
+          >
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold text-foreground">{item.label}</span>
+              <span className="block text-xs text-muted-foreground">{item.detail}</span>
+            </span>
+            <Switch
+              checked={value[item.key]}
+              onCheckedChange={(checked) => onChange({ ...value, [item.key]: checked })}
+            />
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function AddAgentDialog({
   onClose,
   onCreate,
 }: {
   onClose: () => void;
-  onCreate: (name: string, options: { inheritWorkspace: boolean }) => Promise<void>;
+  onCreate: (name: string, options: {
+    inheritWorkspace: boolean;
+    templateId: string;
+    description: string;
+    instructions: string;
+    toolPermissions: AgentToolPermissions;
+  }) => Promise<void>;
 }) {
   const { t } = useTranslation('agents');
   const [name, setName] = useState('');
+  const [templateId, setTemplateId] = useState('general');
+  const [description, setDescription] = useState('');
+  const [instructions, setInstructions] = useState(TEMPLATE_INSTRUCTIONS.general);
+  const [toolPermissions, setToolPermissions] = useState<AgentToolPermissions>(DEFAULT_TOOL_PERMISSIONS);
   const [inheritWorkspace, setInheritWorkspace] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  const handleTemplateChange = (nextTemplateId: string) => {
+    setTemplateId(nextTemplateId);
+    setInstructions(TEMPLATE_INSTRUCTIONS[nextTemplateId] || TEMPLATE_INSTRUCTIONS.general);
+    const template = AGENT_TEMPLATE_OPTIONS.find((option) => option.id === nextTemplateId);
+    setDescription(template?.description || '');
+    setToolPermissions({
+      ...DEFAULT_TOOL_PERMISSIONS,
+      shell: nextTemplateId === 'research' || nextTemplateId === 'writing' ? false : DEFAULT_TOOL_PERMISSIONS.shell,
+      browser: nextTemplateId === 'writing' ? false : DEFAULT_TOOL_PERMISSIONS.browser,
+    });
+  };
 
   const handleSubmit = async () => {
     if (!name.trim()) return;
     setSaving(true);
     try {
-      await onCreate(name.trim(), { inheritWorkspace });
+      await onCreate(name.trim(), {
+        inheritWorkspace,
+        templateId,
+        description: description.trim(),
+        instructions: instructions.trim(),
+        toolPermissions,
+      });
     } catch (error) {
       toast.error(t('toast.agentCreateFailed', { error: String(error) }));
       setSaving(false);
@@ -386,7 +481,7 @@ function AddAgentDialog({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <Card className="w-full max-w-md rounded-3xl border-0 shadow-2xl bg-surface-modal overflow-hidden">
+      <Card className="w-full max-w-2xl max-h-[90vh] rounded-3xl border-0 shadow-2xl bg-surface-modal overflow-hidden flex flex-col">
         <CardHeader className="pb-2">
           <CardTitle className="text-2xl font-serif font-normal tracking-tight">
             {t('createDialog.title')}
@@ -395,7 +490,7 @@ function AddAgentDialog({
             {t('createDialog.description')}
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-6 pt-4 p-6">
+        <CardContent className="space-y-6 pt-4 p-6 overflow-y-auto">
           <div className="space-y-2.5">
             <Label htmlFor="agent-name" className={labelClasses}>{t('createDialog.nameLabel')}</Label>
             <Input
@@ -406,6 +501,42 @@ function AddAgentDialog({
               className={inputClasses}
             />
           </div>
+          <div className="space-y-2.5">
+            <Label htmlFor="agent-template" className={labelClasses}>Template</Label>
+            <select
+              id="agent-template"
+              value={templateId}
+              onChange={(event) => handleTemplateChange(event.target.value)}
+              className={selectClasses}
+            >
+              {AGENT_TEMPLATE_OPTIONS.map((template) => (
+                <option key={template.id} value={template.id}>{template.label}</option>
+              ))}
+            </select>
+            <p className="text-meta text-foreground/60">
+              {AGENT_TEMPLATE_OPTIONS.find((template) => template.id === templateId)?.description}
+            </p>
+          </div>
+          <div className="space-y-2.5">
+            <Label htmlFor="agent-description" className={labelClasses}>Description</Label>
+            <Input
+              id="agent-description"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              placeholder="What this agent is for"
+              className={inputClasses}
+            />
+          </div>
+          <div className="space-y-2.5">
+            <Label htmlFor="agent-instructions" className={labelClasses}>Instructions</Label>
+            <textarea
+              id="agent-instructions"
+              value={instructions}
+              onChange={(event) => setInstructions(event.target.value)}
+              className="min-h-[120px] w-full rounded-xl text-sm bg-transparent border border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:border-blue-500 shadow-sm transition-all text-foreground placeholder:text-foreground/40 p-3 resize-y"
+            />
+          </div>
+          <ToolPermissionEditor value={toolPermissions} onChange={setToolPermissions} />
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
               <Label htmlFor="inherit-workspace" className={labelClasses}>{t('createDialog.inheritWorkspaceLabel')}</Label>
@@ -456,17 +587,29 @@ function AgentSettingsModal({
   onClose: () => void;
 }) {
   const { t } = useTranslation('agents');
-  const { updateAgent, defaultModelRef } = useAgentsStore();
+  const { updateAgentProfile, defaultModelRef } = useAgentsStore();
   const [name, setName] = useState(agent.name);
+  const [description, setDescription] = useState(agent.description || '');
+  const [instructions, setInstructions] = useState(agent.instructions || '');
+  const [templateId, setTemplateId] = useState(agent.templateId || 'general');
+  const [toolPermissions, setToolPermissions] = useState<AgentToolPermissions>(agent.toolPermissions || DEFAULT_TOOL_PERMISSIONS);
   const [savingName, setSavingName] = useState(false);
   const [showModelModal, setShowModelModal] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
 
   useEffect(() => {
     setName(agent.name);
-  }, [agent.name]);
+    setDescription(agent.description || '');
+    setInstructions(agent.instructions || '');
+    setTemplateId(agent.templateId || 'general');
+    setToolPermissions(agent.toolPermissions || DEFAULT_TOOL_PERMISSIONS);
+  }, [agent.description, agent.instructions, agent.name, agent.templateId, agent.toolPermissions]);
 
-  const hasNameChanges = name.trim() !== agent.name;
+  const hasNameChanges = name.trim() !== agent.name
+    || description.trim() !== (agent.description || '')
+    || instructions.trim() !== (agent.instructions || '')
+    || templateId !== (agent.templateId || 'general')
+    || JSON.stringify(toolPermissions) !== JSON.stringify(agent.toolPermissions || DEFAULT_TOOL_PERMISSIONS);
 
   const handleRequestClose = () => {
     if (savingName || hasNameChanges) {
@@ -480,7 +623,13 @@ function AgentSettingsModal({
     if (!name.trim() || name.trim() === agent.name) return;
     setSavingName(true);
     try {
-      await updateAgent(agent.id, name.trim());
+      await updateAgentProfile(agent.id, {
+        name: name.trim(),
+        description: description.trim(),
+        instructions: instructions.trim(),
+        templateId,
+        toolPermissions,
+      });
       toast.success(t('toast.agentUpdated'));
     } catch (error) {
       toast.error(t('toast.agentUpdateFailed', { error: String(error) }));
@@ -536,22 +685,66 @@ function AgentSettingsModal({
                   readOnly={agent.isDefault}
                   className={inputClasses}
                 />
-                {!agent.isDefault && (
-                  <Button
-                    variant="outline"
-                    onClick={() => void handleSaveName()}
-                    disabled={savingName || !name.trim() || name.trim() === agent.name}
-                    className="h-[44px] text-meta font-medium rounded-xl px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-none text-foreground/80 hover:text-foreground"
-                  >
-                    {savingName ? (
-                      <RefreshCw className="h-4 w-4 animate-spin" />
-                    ) : (
-                      t('common:actions.save')
-                    )}
-                  </Button>
-                )}
+                <Button
+                  variant="outline"
+                  onClick={() => void handleSaveName()}
+                  disabled={savingName || !name.trim() || !hasNameChanges}
+                  className="h-[44px] text-meta font-medium rounded-xl px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-none text-foreground/80 hover:text-foreground"
+                >
+                  {savingName ? (
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                  ) : (
+                    t('common:actions.save')
+                  )}
+                </Button>
               </div>
             </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2.5">
+                <Label htmlFor="agent-settings-template" className={labelClasses}>Template</Label>
+                <select
+                  id="agent-settings-template"
+                  value={templateId}
+                  onChange={(event) => {
+                    const nextTemplateId = event.target.value;
+                    setTemplateId(nextTemplateId);
+                    if (!instructions.trim() || instructions === TEMPLATE_INSTRUCTIONS[agent.templateId || 'general']) {
+                      setInstructions(TEMPLATE_INSTRUCTIONS[nextTemplateId] || TEMPLATE_INSTRUCTIONS.general);
+                    }
+                  }}
+                  className={selectClasses}
+                >
+                  {AGENT_TEMPLATE_OPTIONS.map((template) => (
+                    <option key={template.id} value={template.id}>{template.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2.5">
+                <Label htmlFor="agent-settings-description" className={labelClasses}>Description</Label>
+                <Input
+                  id="agent-settings-description"
+                  value={description}
+                  onChange={(event) => setDescription(event.target.value)}
+                  className={inputClasses}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2.5">
+              <div className="flex items-center gap-2">
+                <FileText className="h-4 w-4 text-foreground/70" />
+                <Label htmlFor="agent-settings-instructions" className={labelClasses}>Instructions</Label>
+              </div>
+              <textarea
+                id="agent-settings-instructions"
+                value={instructions}
+                onChange={(event) => setInstructions(event.target.value)}
+                className="min-h-[140px] w-full rounded-xl text-sm bg-transparent border border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:border-blue-500 shadow-sm transition-all text-foreground placeholder:text-foreground/40 p-3 resize-y"
+              />
+            </div>
+
+            <ToolPermissionEditor value={toolPermissions} onChange={setToolPermissions} />
 
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-1 rounded-2xl bg-black/5 dark:bg-white/5 border border-transparent p-4">
@@ -639,6 +832,10 @@ function AgentSettingsModal({
         onConfirm={() => {
           setShowCloseConfirm(false);
           setName(agent.name);
+          setDescription(agent.description || '');
+          setInstructions(agent.instructions || '');
+          setTemplateId(agent.templateId || 'general');
+          setToolPermissions(agent.toolPermissions || DEFAULT_TOOL_PERMISSIONS);
           onClose();
         }}
         onCancel={() => setShowCloseConfirm(false)}

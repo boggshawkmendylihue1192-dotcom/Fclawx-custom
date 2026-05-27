@@ -15,6 +15,7 @@ import { Agents } from './pages/Agents';
 import { Channels } from './pages/Channels';
 import { Skills } from './pages/Skills';
 import { Cron } from './pages/Cron';
+import { Workflows } from './pages/Workflows';
 import { Dreams } from './pages/Dreams';
 import { ImageGenerationPage } from './pages/ImageGeneration';
 import { Settings } from './pages/Settings';
@@ -207,6 +208,7 @@ function App() {
             <Route path="/channels" element={<Channels />} />
             <Route path="/skills" element={<Skills />} />
             <Route path="/cron" element={<Cron />} />
+            <Route path="/workflows" element={<Workflows />} />
             <Route path="/image-generation" element={devModeUnlocked ? <ImageGenerationPage /> : <Navigate to="/" replace />} />
             <Route path="/dreams" element={devModeUnlocked ? <Dreams /> : <Navigate to="/" replace />} />
             <Route path="/settings/*" element={<Settings />} />

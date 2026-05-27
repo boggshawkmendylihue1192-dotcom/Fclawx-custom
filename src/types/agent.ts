@@ -1,6 +1,10 @@
 export interface AgentSummary {
   id: string;
   name: string;
+  description?: string;
+  instructions?: string;
+  templateId?: string;
+  toolPermissions?: AgentToolPermissions;
   isDefault: boolean;
   modelDisplay: string;
   modelRef?: string | null;
@@ -10,6 +14,14 @@ export interface AgentSummary {
   agentDir: string;
   mainSessionKey: string;
   channelTypes: string[];
+}
+
+export interface AgentToolPermissions {
+  files: boolean;
+  shell: boolean;
+  browser: boolean;
+  skills: boolean;
+  memory: boolean;
 }
 
 export interface AgentsSnapshot {
