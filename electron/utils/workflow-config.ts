@@ -34,7 +34,7 @@ function normalizeStep(step: Partial<WorkflowStep>, index: number): WorkflowStep
   return {
     id: typeof step.id === 'string' && step.id.trim() ? step.id : randomUUID(),
     agentId: typeof step.agentId === 'string' && step.agentId.trim() ? step.agentId.trim() : 'main',
-    title: typeof step.title === 'string' && step.title.trim() ? step.title.trim() : `Step ${index + 1}`,
+    title: typeof step.title === 'string' && step.title.trim() ? step.title.trim() : `步骤 ${index + 1}`,
     prompt: typeof step.prompt === 'string' ? step.prompt.trim() : '',
   };
 }
@@ -45,10 +45,10 @@ function normalizeWorkflow(workflow: Partial<WorkflowDefinition>): WorkflowDefin
     : [];
   return {
     id: typeof workflow.id === 'string' && workflow.id.trim() ? workflow.id : randomUUID(),
-    name: typeof workflow.name === 'string' && workflow.name.trim() ? workflow.name.trim() : 'Untitled Workflow',
+    name: typeof workflow.name === 'string' && workflow.name.trim() ? workflow.name.trim() : '未命名工作流',
     description: typeof workflow.description === 'string' ? workflow.description.trim() : '',
     executionMode: workflow.executionMode === 'parallel' ? 'parallel' : 'sequential',
-    steps: steps.length > 0 ? steps : [normalizeStep({ title: 'Plan', prompt: 'Break down the request and propose the next action.' }, 0)],
+    steps: steps.length > 0 ? steps : [normalizeStep({ title: '规划任务', prompt: '拆解请求，并提出下一步行动。' }, 0)],
     updatedAt: typeof workflow.updatedAt === 'number' ? workflow.updatedAt : Date.now(),
   };
 }

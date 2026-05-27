@@ -22,8 +22,8 @@ function createStep(agentId: string, index: number): WorkflowStep {
   return {
     id: crypto.randomUUID(),
     agentId,
-    title: index === 0 ? 'Plan' : `Step ${index + 1}`,
-    prompt: index === 0 ? 'Break down the task and identify the work needed.' : '',
+    title: index === 0 ? '规划任务' : `步骤 ${index + 1}`,
+    prompt: index === 0 ? '拆解任务，确认需要完成的工作。' : '',
   };
 }
 
@@ -33,21 +33,21 @@ function composeWorkflowPrompt(workflow: WorkflowDefinition, agentsById: Record<
     return `${index + 1}. ${step.title}\nTarget agentId: ${step.agentId} (${agentName})\nTask:\n${step.prompt}`;
   }).join('\n\n');
   const executionGuidance = workflow.executionMode === 'parallel'
-    ? 'Spawn all independent steps first with sessions_spawn, using the exact target agentId for each step. Then call sessions_yield and synthesize the child results.'
-    : 'Run the steps in order. For any step assigned to another agent, call sessions_spawn with the exact target agentId, call sessions_yield when you need that result, then continue to the next step.';
+    ? '先用 sessions_spawn 启动所有彼此独立的步骤，每一步都必须使用对应的 exact target agentId。然后调用 sessions_yield 收集子任务结果，并综合输出。'
+    : '按顺序执行步骤。任何分配给其他智能体的步骤，都必须用 sessions_spawn 并传入 exact target agentId；需要结果时调用 sessions_yield，然后继续下一步。';
   return [
-    `Run this multi-agent workflow: ${workflow.name}`,
-    workflow.description ? `Description: ${workflow.description}` : '',
-    `Execution mode: ${workflow.executionMode}`,
+    `执行这个多智能体工作流：${workflow.name}`,
+    workflow.description ? `描述：${workflow.description}` : '',
+    `执行模式：${workflow.executionMode}`,
     '',
     'Delegation protocol:',
-    '- Use sessions_spawn for delegated work instead of only describing delegation.',
-    '- Always pass the step target as agentId.',
-    '- Use a short taskName derived from the step title when possible.',
-    '- Child results are evidence; verify and synthesize them before the final answer.',
+    '- 委托给其他智能体时必须实际调用 sessions_spawn，不要只在文字里描述委托。',
+    '- 始终把步骤目标作为 agentId 传入。',
+    '- 尽量根据步骤标题生成简短的 taskName。',
+    '- 子任务结果是证据；最终回答前要核对、整合这些结果。',
     `- ${executionGuidance}`,
     '',
-    'Workflow steps:',
+    '工作流步骤：',
     steps,
   ].filter(Boolean).join('\n');
 }
@@ -74,7 +74,7 @@ export function Workflows() {
   const handleNew = () => {
     setEditing({
       id: crypto.randomUUID(),
-      name: 'New Workflow',
+      name: '新工作流',
       description: '',
       executionMode: 'sequential',
       steps: [createStep(firstAgentId, 0), createStep(firstAgentId, 1)],
@@ -87,9 +87,9 @@ export function Workflows() {
     try {
       navigate('/');
       await sendMessage(composeWorkflowPrompt(workflow, agentsById), undefined, workflow.steps[0]?.agentId || 'main');
-      toast.success('Workflow started');
+      toast.success('工作流已启动');
     } catch (err) {
-      toast.error(`Failed to start workflow: ${String(err)}`);
+      toast.error(`启动工作流失败：${String(err)}`);
     } finally {
       setRunningId(null);
     }
@@ -108,17 +108,17 @@ export function Workflows() {
       <div className="w-full max-w-5xl mx-auto flex flex-col h-full p-10 pt-16">
         <div className="flex flex-col md:flex-row md:items-start justify-between mb-12 shrink-0 gap-4">
           <div>
-            <h1 className="text-5xl md:text-6xl font-serif text-foreground mb-3 font-normal tracking-tight">Workflows</h1>
-            <p className="text-subtitle text-foreground/70 font-medium">Build reusable multi-agent task flows.</p>
+            <h1 className="text-5xl md:text-6xl font-serif text-foreground mb-3 font-normal tracking-tight">工作流</h1>
+            <p className="text-subtitle text-foreground/70 font-medium">编排可复用的多智能体任务流程。</p>
           </div>
           <div className="flex items-center gap-3 md:mt-2">
             <Button variant="outline" onClick={() => void fetchWorkflows()} className="h-9 text-meta font-medium rounded-full px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-none">
               <RefreshCw className={cn('h-3.5 w-3.5 mr-2', loading && 'animate-spin')} />
-              Refresh
+              刷新
             </Button>
             <Button onClick={handleNew} className="h-9 text-meta font-medium rounded-full px-4 shadow-none">
               <Plus className="h-3.5 w-3.5 mr-2" />
-              Add Workflow
+              新建工作流
             </Button>
           </div>
         </div>
@@ -130,7 +130,7 @@ export function Workflows() {
         <div className="flex-1 overflow-y-auto pr-2 pb-10 min-h-0 -mr-2 space-y-3">
           {workflows.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 p-8 text-center text-muted-foreground">
-              No workflows yet.
+              还没有工作流。
             </div>
           ) : workflows.map((workflow) => (
             <div key={workflow.id} className="group flex items-start gap-4 p-4 rounded-2xl transition-all border border-transparent hover:bg-black/5 dark:hover:bg-white/5">
@@ -140,16 +140,16 @@ export function Workflows() {
               <button type="button" onClick={() => setEditing(workflow)} className="flex-1 min-w-0 text-left">
                 <div className="flex items-center gap-2">
                   <h2 className="text-base font-semibold text-foreground truncate">{workflow.name}</h2>
-                  <span className="text-xs text-muted-foreground">{workflow.steps.length} steps</span>
-                  <span className="text-xs text-muted-foreground">{workflow.executionMode || 'sequential'}</span>
+                  <span className="text-xs text-muted-foreground">{workflow.steps.length} 个步骤</span>
+                  <span className="text-xs text-muted-foreground">{(workflow.executionMode || 'sequential') === 'parallel' ? '并行' : '顺序'}</span>
                 </div>
                 <p className="text-sm text-muted-foreground line-clamp-2">{workflow.description || workflow.steps.map((step) => step.title).join(' -> ')}</p>
               </button>
               <div className="flex items-center gap-1 shrink-0">
-                <Button variant="ghost" size="icon" title="Run" disabled={runningId === workflow.id} onClick={() => void handleRun(workflow)} className="h-8 w-8 rounded-lg">
+                <Button variant="ghost" size="icon" title="运行" disabled={runningId === workflow.id} onClick={() => void handleRun(workflow)} className="h-8 w-8 rounded-lg">
                   {runningId === workflow.id ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                 </Button>
-                <Button variant="ghost" size="icon" title="Delete" onClick={() => setWorkflowToDelete(workflow)} className="h-8 w-8 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10">
+                <Button variant="ghost" size="icon" title="删除" onClick={() => setWorkflowToDelete(workflow)} className="h-8 w-8 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10">
                   <Trash2 className="h-4 w-4" />
                 </Button>
               </div>
@@ -166,23 +166,23 @@ export function Workflows() {
           onSave={async (workflow) => {
             await saveWorkflow(workflow);
             setEditing(null);
-            toast.success('Workflow saved');
+            toast.success('工作流已保存');
           }}
         />
       )}
 
       <ConfirmDialog
         open={!!workflowToDelete}
-        title="Delete Workflow"
-        message={workflowToDelete ? `Delete "${workflowToDelete.name}"?` : ''}
-        confirmLabel="Delete"
-        cancelLabel="Cancel"
+        title="删除工作流"
+        message={workflowToDelete ? `确定删除“${workflowToDelete.name}”？` : ''}
+        confirmLabel="删除"
+        cancelLabel="取消"
         variant="destructive"
         onConfirm={async () => {
           if (!workflowToDelete) return;
           await deleteWorkflow(workflowToDelete.id);
           setWorkflowToDelete(null);
-          toast.success('Workflow deleted');
+          toast.success('工作流已删除');
         }}
         onCancel={() => setWorkflowToDelete(null)}
       />
@@ -217,8 +217,8 @@ function WorkflowEditor({
       <Card className="w-full max-w-3xl max-h-[90vh] flex flex-col rounded-3xl border-0 shadow-2xl bg-surface-modal overflow-hidden">
         <CardHeader className="flex flex-row items-start justify-between pb-2 shrink-0">
           <div>
-            <CardTitle className="text-2xl font-serif font-normal tracking-tight">{draft.name || 'Workflow'}</CardTitle>
-            <CardDescription className="text-sm mt-1 text-foreground/70">Arrange steps and assign each step to an agent.</CardDescription>
+            <CardTitle className="text-2xl font-serif font-normal tracking-tight">{draft.name || '工作流'}</CardTitle>
+            <CardDescription className="text-sm mt-1 text-foreground/70">排列步骤，并把每一步分配给对应智能体。</CardDescription>
           </div>
           <Button variant="ghost" size="icon" onClick={onClose} className="rounded-full h-8 w-8 -mr-2 -mt-2">
             <X className="h-4 w-4" />
@@ -227,22 +227,22 @@ function WorkflowEditor({
         <CardContent className="space-y-5 pt-4 overflow-y-auto flex-1 p-6">
           <div className="grid gap-4 md:grid-cols-[1fr_1fr_180px]">
             <div className="space-y-2">
-              <Label className={labelClasses}>Name</Label>
+              <Label className={labelClasses}>名称</Label>
               <Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} className={inputClasses} />
             </div>
             <div className="space-y-2">
-              <Label className={labelClasses}>Description</Label>
+              <Label className={labelClasses}>描述</Label>
               <Input value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} className={inputClasses} />
             </div>
             <div className="space-y-2">
-              <Label className={labelClasses}>Mode</Label>
+              <Label className={labelClasses}>模式</Label>
               <select
                 value={draft.executionMode || 'sequential'}
                 onChange={(event) => setDraft({ ...draft, executionMode: event.target.value === 'parallel' ? 'parallel' : 'sequential' })}
                 className={selectClasses}
               >
-                <option value="sequential">Sequential</option>
-                <option value="parallel">Parallel</option>
+                <option value="sequential">顺序执行</option>
+                <option value="parallel">并行执行</option>
               </select>
             </div>
           </div>
@@ -253,7 +253,7 @@ function WorkflowEditor({
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                     <Bot className="h-4 w-4" />
-                    Step {index + 1}
+                    步骤 {index + 1}
                   </div>
                   <Button
                     variant="ghost"
@@ -275,7 +275,7 @@ function WorkflowEditor({
                   value={step.prompt}
                   onChange={(event) => updateStep(step.id, { prompt: event.target.value })}
                   className="min-h-[90px] w-full rounded-xl text-sm bg-transparent border border-black/10 dark:border-white/10 p-3 resize-y"
-                  placeholder="What this step should do"
+                  placeholder="写清楚这一步要完成什么"
                 />
               </div>
             ))}
@@ -288,10 +288,10 @@ function WorkflowEditor({
               className="h-9 rounded-full px-4"
             >
               <Plus className="h-4 w-4 mr-2" />
-              Add Step
+              添加步骤
             </Button>
             <div className="flex items-center gap-2">
-              <Button variant="outline" onClick={onClose} className="h-9 rounded-full px-4">Cancel</Button>
+              <Button variant="outline" onClick={onClose} className="h-9 rounded-full px-4">取消</Button>
               <Button
                 disabled={saving || !draft.name.trim()}
                 onClick={async () => {
@@ -305,7 +305,7 @@ function WorkflowEditor({
                 className="h-9 rounded-full px-4"
               >
                 {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
-                {!saving && 'Save'}
+                {!saving && '保存'}
               </Button>
             </div>
           </div>
