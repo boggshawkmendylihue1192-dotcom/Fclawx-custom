@@ -518,6 +518,10 @@ export async function syncUpdatedProviderToRuntime(
   const isDefaultProvider = defaultProviderId === config.id;
   if (isDefaultProvider) {
     const modelOverride = config.model ? `${ock}/${config.model}` : undefined;
+    const browserOAuthRuntimeProvider = await getBrowserOAuthRuntimeProvider(config);
+    if (browserOAuthRuntimeProvider) {
+      await setOpenClawDefaultModel(browserOAuthRuntimeProvider, modelOverride, fallbackModels);
+    } else
     if (!isUnregisteredProviderType(config.type)) {
       if (shouldUseExplicitDefaultOverride(config, ock)) {
         await setOpenClawDefaultModelWithOverride(ock, modelOverride, {

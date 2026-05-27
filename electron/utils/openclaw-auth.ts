@@ -837,6 +837,10 @@ export async function saveOAuthTokenToOpenClaw(
   for (const id of agentIds) {
     const store = await readAuthProfiles(id);
     const profileId = `${provider}:default`;
+    const staleApiKeyProfileIds = [
+      `${provider}:launcher`,
+      ...(provider === 'openai-codex' ? ['openai:default', 'openai:launcher'] : []),
+    ];
 
     store.profiles[profileId] = {
       type: 'oauth',
@@ -848,11 +852,16 @@ export async function saveOAuthTokenToOpenClaw(
       projectId: token.projectId,
     };
 
-    if (!store.order) store.order = {};
-    if (!store.order[provider]) store.order[provider] = [];
-    if (!store.order[provider].includes(profileId)) {
-      store.order[provider].push(profileId);
+    for (const staleProfileId of staleApiKeyProfileIds) {
+      removeProfileFromStore(store, staleProfileId, 'api_key');
     }
+
+    if (!store.order) store.order = {};
+    const existingOrder = store.order[provider] ?? [];
+    store.order[provider] = [
+      profileId,
+      ...existingOrder.filter((id) => id !== profileId && !staleApiKeyProfileIds.includes(id)),
+    ];
 
     if (!store.lastGood) store.lastGood = {};
     store.lastGood[provider] = profileId;
