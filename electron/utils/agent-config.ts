@@ -32,9 +32,23 @@ interface AgentModelConfig {
   [key: string]: unknown;
 }
 
+interface AgentToolsConfig extends Record<string, unknown> {
+  profile?: string;
+  alsoAllow?: string[];
+}
+
+interface AgentSubagentsConfig extends Record<string, unknown> {
+  allowAgents?: string[];
+  delegationMode?: 'suggest' | 'prefer';
+  maxConcurrent?: number;
+  maxSpawnDepth?: number;
+  runTimeoutSeconds?: number;
+}
+
 interface AgentDefaultsConfig {
   workspace?: string;
   model?: string | AgentModelConfig;
+  subagents?: AgentSubagentsConfig;
   [key: string]: unknown;
 }
 
@@ -48,6 +62,8 @@ interface AgentListEntry extends Record<string, unknown> {
   workspace?: string;
   agentDir?: string;
   model?: string | AgentModelConfig;
+  tools?: AgentToolsConfig;
+  subagents?: AgentSubagentsConfig;
 }
 
 interface AgentsConfig extends Record<string, unknown> {
@@ -105,6 +121,7 @@ export interface AgentToolPermissions {
   browser: boolean;
   skills: boolean;
   memory: boolean;
+  delegation: boolean;
 }
 
 export interface AgentProfileUpdate {
@@ -130,7 +147,10 @@ const DEFAULT_TOOL_PERMISSIONS: AgentToolPermissions = {
   browser: true,
   skills: true,
   memory: true,
+  delegation: true,
 };
+
+const DELEGATION_TOOL_NAMES = ['sessions_spawn', 'sessions_yield', 'subagents', 'agents_list'];
 
 const AGENT_TEMPLATES: Record<string, {
   description: string;
@@ -211,7 +231,59 @@ function normalizeToolPermissions(value: unknown): AgentToolPermissions {
     browser: typeof source.browser === 'boolean' ? source.browser : DEFAULT_TOOL_PERMISSIONS.browser,
     skills: typeof source.skills === 'boolean' ? source.skills : DEFAULT_TOOL_PERMISSIONS.skills,
     memory: typeof source.memory === 'boolean' ? source.memory : DEFAULT_TOOL_PERMISSIONS.memory,
+    delegation: typeof source.delegation === 'boolean' ? source.delegation : DEFAULT_TOOL_PERMISSIONS.delegation,
   };
+}
+
+function uniqueStrings(values: unknown[]): string[] {
+  return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0).map((value) => value.trim()))];
+}
+
+function ensureDelegationConfig(config: AgentConfigDocument, entries: AgentListEntry[]): void {
+  const agentIds = entries.map((entry) => entry.id).filter(Boolean);
+  const agentsConfig = config.agents && typeof config.agents === 'object' ? config.agents : {};
+  const defaults = agentsConfig.defaults && typeof agentsConfig.defaults === 'object' ? agentsConfig.defaults : {};
+  const existingSubagents = defaults.subagents && typeof defaults.subagents === 'object' ? defaults.subagents : {};
+
+  config.agents = {
+    ...agentsConfig,
+    defaults: {
+      ...defaults,
+      subagents: {
+        ...existingSubagents,
+        allowAgents: ['*'],
+        delegationMode: existingSubagents.delegationMode || 'prefer',
+        maxConcurrent: typeof existingSubagents.maxConcurrent === 'number' ? existingSubagents.maxConcurrent : 4,
+        maxSpawnDepth: typeof existingSubagents.maxSpawnDepth === 'number' ? Math.max(existingSubagents.maxSpawnDepth, 2) : 2,
+        maxChildrenPerAgent: typeof existingSubagents.maxChildrenPerAgent === 'number' ? existingSubagents.maxChildrenPerAgent : 5,
+        runTimeoutSeconds: typeof existingSubagents.runTimeoutSeconds === 'number' ? existingSubagents.runTimeoutSeconds : 900,
+      },
+    },
+  };
+
+  for (const entry of entries) {
+    const permissions = normalizeToolPermissions(entry.toolPermissions);
+    const existingTools = entry.tools && typeof entry.tools === 'object' ? entry.tools : {};
+    const existingSubagents = entry.subagents && typeof entry.subagents === 'object' ? entry.subagents : {};
+    entry.tools = permissions.delegation
+      ? {
+        ...existingTools,
+        profile: existingTools.profile || 'coding',
+        alsoAllow: uniqueStrings([...(existingTools.alsoAllow || []), ...DELEGATION_TOOL_NAMES]),
+      }
+      : existingTools;
+    entry.subagents = permissions.delegation
+      ? {
+        ...existingSubagents,
+        allowAgents: Array.isArray(existingSubagents.allowAgents) && existingSubagents.allowAgents.length > 0
+          ? existingSubagents.allowAgents
+          : ['*'],
+        delegationMode: existingSubagents.delegationMode || 'prefer',
+      }
+      : existingSubagents;
+  }
+
+  void agentIds;
 }
 
 function slugifyAgentId(name: string): string {
@@ -256,6 +328,7 @@ function buildToolPermissionsBlock(permissions: AgentToolPermissions): string {
     `- Browser: ${permissions.browser ? 'enabled' : 'disabled'}`,
     `- Skills: ${permissions.skills ? 'enabled' : 'disabled'}`,
     `- Memory: ${permissions.memory ? 'enabled' : 'disabled'}`,
+    `- Delegation: ${permissions.delegation ? 'enabled' : 'disabled'}`,
   ];
   return [
     '<!-- CLAWX_AGENT_TOOL_PERMISSIONS_START -->',
@@ -264,6 +337,7 @@ function buildToolPermissionsBlock(permissions: AgentToolPermissions): string {
     ...rows,
     '',
     'Follow these permissions when deciding whether to use tools for this agent.',
+    'When Delegation is enabled and a task benefits from another configured agent, use sessions_spawn with an explicit agentId and call sessions_yield when you need child results before the final answer.',
     '<!-- CLAWX_AGENT_TOOL_PERMISSIONS_END -->',
   ].join('\n');
 }
@@ -699,6 +773,12 @@ async function buildSnapshotFromConfig(config: AgentConfigDocument, preloadedCha
 
 export async function listAgentsSnapshot(): Promise<AgentsSnapshot> {
   const config = await readOpenClawConfig() as AgentConfigDocument;
+  const before = JSON.stringify(config.agents);
+  const { entries } = normalizeAgentsConfig(config);
+  ensureDelegationConfig(config, entries);
+  if (JSON.stringify(config.agents) !== before) {
+    await writeOpenClawConfig(config);
+  }
   return buildSnapshotFromConfig(config);
 }
 
@@ -771,9 +851,10 @@ export async function createAgent(
       nextEntries.unshift(createImplicitMainEntry(config));
     }
     nextEntries.push(newAgent);
+    ensureDelegationConfig(config, nextEntries);
 
     config.agents = {
-      ...agentsConfig,
+      ...(config.agents || agentsConfig),
       list: nextEntries,
     };
 
@@ -847,8 +928,9 @@ export async function updateAgentProfile(agentId: string, update: AgentProfileUp
     }
 
     entries[index] = nextEntry;
+    ensureDelegationConfig(config, entries);
     config.agents = {
-      ...agentsConfig,
+      ...(config.agents || agentsConfig),
       list: entries,
     };
 

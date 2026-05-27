@@ -15,6 +15,7 @@ export interface WorkflowDefinition {
   id: string;
   name: string;
   description: string;
+  executionMode: 'sequential' | 'parallel';
   steps: WorkflowStep[];
   updatedAt: number;
 }
@@ -46,6 +47,7 @@ function normalizeWorkflow(workflow: Partial<WorkflowDefinition>): WorkflowDefin
     id: typeof workflow.id === 'string' && workflow.id.trim() ? workflow.id : randomUUID(),
     name: typeof workflow.name === 'string' && workflow.name.trim() ? workflow.name.trim() : 'Untitled Workflow',
     description: typeof workflow.description === 'string' ? workflow.description.trim() : '',
+    executionMode: workflow.executionMode === 'parallel' ? 'parallel' : 'sequential',
     steps: steps.length > 0 ? steps : [normalizeStep({ title: 'Plan', prompt: 'Break down the request and propose the next action.' }, 0)],
     updatedAt: typeof workflow.updatedAt === 'number' ? workflow.updatedAt : Date.now(),
   };

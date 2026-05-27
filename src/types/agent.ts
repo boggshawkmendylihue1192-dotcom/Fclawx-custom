@@ -22,6 +22,16 @@ export interface AgentToolPermissions {
   browser: boolean;
   skills: boolean;
   memory: boolean;
+  delegation: boolean;
+}
+
+export interface AgentDelegationConfig {
+  enabled: boolean;
+  allowAgents: string[];
+  delegationMode: 'suggest' | 'prefer';
+  maxConcurrent: number;
+  maxSpawnDepth: number;
+  runTimeoutSeconds: number;
 }
 
 export interface AgentsSnapshot {

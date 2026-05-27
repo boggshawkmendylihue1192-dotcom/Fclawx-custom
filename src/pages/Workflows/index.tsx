@@ -30,9 +30,26 @@ function createStep(agentId: string, index: number): WorkflowStep {
 function composeWorkflowPrompt(workflow: WorkflowDefinition, agentsById: Record<string, string>): string {
   const steps = workflow.steps.map((step, index) => {
     const agentName = agentsById[step.agentId] || step.agentId;
-    return `${index + 1}. ${step.title} (@${agentName})\n${step.prompt}`;
+    return `${index + 1}. ${step.title}\nTarget agentId: ${step.agentId} (${agentName})\nTask:\n${step.prompt}`;
   }).join('\n\n');
-  return `Run this multi-agent workflow: ${workflow.name}\n\n${workflow.description ? `${workflow.description}\n\n` : ''}${steps}\n\nExecute the steps in order. When a step names another agent, delegate or route work to that agent where the runtime supports it, then synthesize the final result.`;
+  const executionGuidance = workflow.executionMode === 'parallel'
+    ? 'Spawn all independent steps first with sessions_spawn, using the exact target agentId for each step. Then call sessions_yield and synthesize the child results.'
+    : 'Run the steps in order. For any step assigned to another agent, call sessions_spawn with the exact target agentId, call sessions_yield when you need that result, then continue to the next step.';
+  return [
+    `Run this multi-agent workflow: ${workflow.name}`,
+    workflow.description ? `Description: ${workflow.description}` : '',
+    `Execution mode: ${workflow.executionMode}`,
+    '',
+    'Delegation protocol:',
+    '- Use sessions_spawn for delegated work instead of only describing delegation.',
+    '- Always pass the step target as agentId.',
+    '- Use a short taskName derived from the step title when possible.',
+    '- Child results are evidence; verify and synthesize them before the final answer.',
+    `- ${executionGuidance}`,
+    '',
+    'Workflow steps:',
+    steps,
+  ].filter(Boolean).join('\n');
 }
 
 export function Workflows() {
@@ -59,6 +76,7 @@ export function Workflows() {
       id: crypto.randomUUID(),
       name: 'New Workflow',
       description: '',
+      executionMode: 'sequential',
       steps: [createStep(firstAgentId, 0), createStep(firstAgentId, 1)],
       updatedAt: Date.now(),
     });
@@ -123,6 +141,7 @@ export function Workflows() {
                 <div className="flex items-center gap-2">
                   <h2 className="text-base font-semibold text-foreground truncate">{workflow.name}</h2>
                   <span className="text-xs text-muted-foreground">{workflow.steps.length} steps</span>
+                  <span className="text-xs text-muted-foreground">{workflow.executionMode || 'sequential'}</span>
                 </div>
                 <p className="text-sm text-muted-foreground line-clamp-2">{workflow.description || workflow.steps.map((step) => step.title).join(' -> ')}</p>
               </button>
@@ -206,7 +225,7 @@ function WorkflowEditor({
           </Button>
         </CardHeader>
         <CardContent className="space-y-5 pt-4 overflow-y-auto flex-1 p-6">
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-[1fr_1fr_180px]">
             <div className="space-y-2">
               <Label className={labelClasses}>Name</Label>
               <Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} className={inputClasses} />
@@ -214,6 +233,17 @@ function WorkflowEditor({
             <div className="space-y-2">
               <Label className={labelClasses}>Description</Label>
               <Input value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} className={inputClasses} />
+            </div>
+            <div className="space-y-2">
+              <Label className={labelClasses}>Mode</Label>
+              <select
+                value={draft.executionMode || 'sequential'}
+                onChange={(event) => setDraft({ ...draft, executionMode: event.target.value === 'parallel' ? 'parallel' : 'sequential' })}
+                className={selectClasses}
+              >
+                <option value="sequential">Sequential</option>
+                <option value="parallel">Parallel</option>
+              </select>
             </div>
           </div>
 

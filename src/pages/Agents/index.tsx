@@ -72,6 +72,7 @@ const DEFAULT_TOOL_PERMISSIONS: AgentToolPermissions = {
   browser: true,
   skills: true,
   memory: true,
+  delegation: true,
 };
 
 export function Agents() {
@@ -397,6 +398,7 @@ function ToolPermissionEditor({
     { key: 'browser', label: 'Browser', detail: 'Open web pages for research and verification' },
     { key: 'skills', label: 'Skills', detail: 'Use installed OpenClaw/Codex skills' },
     { key: 'memory', label: 'Memory', detail: 'Use persistent context where available' },
+    { key: 'delegation', label: 'Delegation', detail: 'Spawn and steer sub-agents with sessions_spawn' },
   ];
 
   return (

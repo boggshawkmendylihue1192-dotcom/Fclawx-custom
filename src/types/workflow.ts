@@ -9,6 +9,7 @@ export interface WorkflowDefinition {
   id: string;
   name: string;
   description: string;
+  executionMode: 'sequential' | 'parallel';
   steps: WorkflowStep[];
   updatedAt: number;
 }
