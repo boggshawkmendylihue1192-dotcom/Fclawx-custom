@@ -2,8 +2,8 @@
  * Update Settings Component
  * Displays update status and allows manual update checking/installation
  */
-import { useEffect, useCallback } from 'react';
-import { Download, RefreshCw, Loader2, Rocket, XCircle } from 'lucide-react';
+import { useEffect, useCallback, useState } from 'react';
+import { Download, RefreshCw, Loader2, Rocket, XCircle, Activity } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { useUpdateStore } from '@/stores/update';
@@ -16,6 +16,17 @@ function formatBytes(bytes: number): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
+
+type UpdateDiagnostics = {
+  checkedAt: number;
+  ok: boolean;
+  latestVersion?: string;
+  releaseUrl?: string;
+  assetNames: string[];
+  latestYmlFound: boolean;
+  exeFound: boolean;
+  message: string;
+};
 
 export function UpdateSettings() {
   const { t } = useTranslation('settings');
@@ -34,6 +45,8 @@ export function UpdateSettings() {
     cancelAutoInstall,
     clearError,
   } = useUpdateStore();
+  const [diagnostics, setDiagnostics] = useState<UpdateDiagnostics | null>(null);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
 
   // Initialize on mount
   useEffect(() => {
@@ -44,6 +57,51 @@ export function UpdateSettings() {
     clearError();
     await checkForUpdates();
   }, [checkForUpdates, clearError]);
+
+  const handleRunDiagnostics = useCallback(async () => {
+    setDiagnosticsLoading(true);
+    try {
+      const response = await fetch('https://api.github.com/repos/boggshawkmendylihue1192-dotcom/Fclawx-custom/releases/latest', {
+        headers: { Accept: 'application/vnd.github+json' },
+      });
+      if (!response.ok) {
+        throw new Error(`GitHub Releases 返回 HTTP ${response.status}`);
+      }
+      const release = await response.json() as {
+        tag_name?: string;
+        html_url?: string;
+        assets?: Array<{ name?: string }>;
+      };
+      const assetNames = (release.assets ?? []).map((asset) => asset.name || '').filter(Boolean);
+      const latestYmlFound = assetNames.includes('latest.yml');
+      const exeFound = assetNames.some((name) => /^ClawX-\d+\.\d+\.\d+-win-x64\.exe$/.test(name));
+      const latestVersion = (release.tag_name || '').replace(/^v/, '');
+      const ok = Boolean(latestVersion && latestYmlFound && exeFound);
+      setDiagnostics({
+        checkedAt: Date.now(),
+        ok,
+        latestVersion,
+        releaseUrl: release.html_url,
+        assetNames,
+        latestYmlFound,
+        exeFound,
+        message: ok
+          ? 'GitHub Release、Windows 安装包和 latest.yml 都存在。'
+          : 'Release 附件不完整，软件内更新可能无法识别新版本。',
+      });
+    } catch (error) {
+      setDiagnostics({
+        checkedAt: Date.now(),
+        ok: false,
+        assetNames: [],
+        latestYmlFound: false,
+        exeFound: false,
+        message: `诊断失败：${String(error)}`,
+      });
+    } finally {
+      setDiagnosticsLoading(false);
+    }
+  }, []);
 
   const renderStatusIcon = () => {
     switch (status) {
@@ -212,6 +270,39 @@ export function UpdateSettings() {
       <p className="text-xs text-muted-foreground">
         {t('updates.help')}
       </p>
+
+      <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold">更新诊断</p>
+            <p className="text-xs text-muted-foreground">检查 GitHub Release、latest.yml 和 Windows 安装包附件。</p>
+          </div>
+          <Button onClick={handleRunDiagnostics} disabled={diagnosticsLoading} variant="outline" size="sm">
+            {diagnosticsLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Activity className="h-4 w-4 mr-2" />}
+            诊断
+          </Button>
+        </div>
+        {diagnostics && (
+          <div className={diagnostics.ok ? 'rounded-lg bg-green-500/10 p-3 text-xs text-green-700 dark:text-green-400' : 'rounded-lg bg-red-500/10 p-3 text-xs text-red-700 dark:text-red-400'}>
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-semibold">{diagnostics.ok ? '更新源正常' : '更新源异常'}</span>
+              <span className="text-current/70">{new Date(diagnostics.checkedAt).toLocaleTimeString()}</span>
+            </div>
+            <p className="mt-1">{diagnostics.message}</p>
+            <div className="mt-2 grid gap-1 text-current/80">
+              <span>当前版本：v{currentVersion}</span>
+              <span>GitHub 最新：{diagnostics.latestVersion ? `v${diagnostics.latestVersion}` : '-'}</span>
+              <span>latest.yml：{diagnostics.latestYmlFound ? '存在' : '缺失'}</span>
+              <span>Windows exe：{diagnostics.exeFound ? '存在' : '缺失'}</span>
+            </div>
+            {diagnostics.releaseUrl && (
+              <a className="mt-2 inline-flex text-current underline" href={diagnostics.releaseUrl} target="_blank" rel="noreferrer">
+                打开 Release
+              </a>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

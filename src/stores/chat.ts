@@ -38,6 +38,7 @@ import {
   DEFAULT_CANONICAL_PREFIX,
   DEFAULT_SESSION_KEY,
   type AttachedFileMeta,
+  type ChatRunDiagnostics,
   type ChatSession,
   type ChatState,
   type ContentBlock,
@@ -58,6 +59,7 @@ export type {
   ContentBlock,
   RawMessage,
   ToolStatus,
+  ChatRunDiagnostics,
 } from './chat/types';
 
 // Module-level timestamp tracking the last chat event received.
@@ -334,26 +336,44 @@ function clearHistoryPoll(): void {
   }
 }
 
+function patchChatDiagnostics(
+  set: ChatSet,
+  patch: Partial<ChatRunDiagnostics> | ((current: ChatRunDiagnostics) => Partial<ChatRunDiagnostics>),
+): void {
+  set((state) => {
+    if (!state.chatDiagnostics) return {};
+    const nextPatch = typeof patch === 'function' ? patch(state.chatDiagnostics) : patch;
+    return { chatDiagnostics: { ...state.chatDiagnostics, ...nextPatch } };
+  });
+}
+
 function startActiveHistoryPoll(
   get: () => ChatState,
+  set: ChatSet,
   delayMs = HISTORY_POLL_START_DELAY_MS,
 ): void {
   if (_historyPollTimer) return;
 
-  const pollHistory = () => {
+  const pollHistory = async () => {
     _historyPollTimer = null;
     const state = get();
     if (!state.sending) return;
     if (state.streamingMessage) {
-      startActiveHistoryPoll(get, HISTORY_POLL_INTERVAL_MS);
+      startActiveHistoryPoll(get, set, HISTORY_POLL_INTERVAL_MS);
       return;
     }
     if (Date.now() - _lastChatEventAt < HISTORY_POLL_SILENCE_WINDOW_MS) {
-      startActiveHistoryPoll(get, HISTORY_POLL_INTERVAL_MS);
+      startActiveHistoryPoll(get, set, HISTORY_POLL_INTERVAL_MS);
       return;
     }
-    void state.loadHistory(true);
-    startActiveHistoryPoll(get, HISTORY_POLL_INTERVAL_MS);
+    patchChatDiagnostics(set, (current) => ({
+      firstHistoryPollAt: current.firstHistoryPollAt ?? Date.now(),
+      historyPollCount: current.historyPollCount + 1,
+    }));
+    await state.loadHistory(true);
+    if (get().sending) {
+      startActiveHistoryPoll(get, set, HISTORY_POLL_INTERVAL_MS);
+    }
   };
 
   _historyPollTimer = setTimeout(pollHistory, delayMs);
@@ -2253,6 +2273,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   pendingFinal: false,
   lastUserMessageAt: null,
   pendingToolImages: [],
+  chatDiagnostics: null,
 
   sessions: [],
   currentSessionKey: DEFAULT_SESSION_KEY,
@@ -2895,6 +2916,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (recentAssistant) {
           clearHistoryPoll();
           set({ sending: false, activeRunId: null, pendingFinal: false, runError: null });
+          patchChatDiagnostics(set, {
+            status: 'completed',
+            finalAt: Date.now(),
+            lastEventState: 'history-final',
+          });
         }
       }
 
@@ -2915,6 +2941,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
             pendingFinal: false,
             lastUserMessageAt: null,
             runError: null,
+          });
+          patchChatDiagnostics(set, {
+            status: 'completed',
+            finalAt: Date.now(),
+            lastEventState: 'history-final',
           });
         }
       }
@@ -3203,6 +3234,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingTools: [],
       pendingFinal: false,
       lastUserMessageAt: nowMs,
+      chatDiagnostics: {
+        sessionKey: currentSessionKey,
+        startedAt: nowMs,
+        historyPollCount: 0,
+        toolEventCount: 0,
+        status: 'sending',
+      },
     }));
 
     // Update session label with first user message text as soon as it's sent
@@ -3225,7 +3263,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     clearHistoryPoll();
     clearErrorRecoveryTimer();
 
-    startActiveHistoryPoll(get);
+    startActiveHistoryPoll(get, set);
 
     const checkStuck = () => {
       const state = get();
@@ -3289,6 +3327,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         pendingFinal: false,
         streamingMessage: null,
         streamingText: '',
+      });
+      patchChatDiagnostics(set, {
+        status: 'error',
+        finalAt: Date.now(),
+        error: 'No response received from the model.',
       });
     };
     setTimeout(checkStuck, 30_000);
@@ -3361,9 +3404,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
         } else {
           clearHistoryPoll();
           set({ error: errorMsg, sending: false });
+          patchChatDiagnostics(set, {
+            status: 'error',
+            finalAt: Date.now(),
+            error: errorMsg,
+          });
         }
       } else if (result.result?.runId) {
         set({ activeRunId: result.result.runId });
+        patchChatDiagnostics(set, { runId: result.result.runId });
       }
     } catch (err) {
       const errStr = String(err);
@@ -3372,6 +3421,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       } else {
         clearHistoryPoll();
         set({ error: errStr, sending: false });
+        patchChatDiagnostics(set, {
+          status: 'error',
+          finalAt: Date.now(),
+          error: errStr,
+        });
       }
     }
   },
@@ -3384,6 +3438,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const { currentSessionKey } = get();
     set({ sending: false, streamingText: '', streamingMessage: null, pendingFinal: false, lastUserMessageAt: null, pendingToolImages: [] });
     set({ streamingTools: [] });
+    patchChatDiagnostics(set, {
+      status: 'aborted',
+      finalAt: Date.now(),
+      lastEventState: 'aborted',
+    });
 
     try {
       await useGatewayStore.getState().rpc(
@@ -3427,6 +3486,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     _lastChatEventAt = Date.now();
+    patchChatDiagnostics(set, (current) => {
+      const now = Date.now();
+      const toolEventCount = collectToolUpdates(event.message, eventState || 'delta').length;
+      return {
+        runId: current.runId ?? (runId || null),
+        firstEventAt: current.firstEventAt ?? now,
+        firstDeltaAt: eventState === 'delta' ? (current.firstDeltaAt ?? now) : current.firstDeltaAt,
+        finalAt: eventState === 'final' ? now : current.finalAt,
+        lastEventAt: now,
+        lastEventState: eventState || 'unknown',
+        toolEventCount: current.toolEventCount + toolEventCount,
+        status: eventState === 'error'
+          ? 'error'
+          : eventState === 'aborted'
+            ? 'aborted'
+            : eventState === 'final'
+              ? 'completed'
+              : current.status,
+      };
+    });
 
     // Defensive: if state is missing but we have a message, try to infer state.
     let resolvedState = eventState;
@@ -3586,7 +3665,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 streamingTools: updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools,
               };
             });
-            startActiveHistoryPoll(get);
+            startActiveHistoryPoll(get, set);
             break;
           }
           // Mixed `[thinking, text, toolCall]` messages with stop_reason="tool_use"
@@ -3713,13 +3792,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
               void get().loadHistory(true);
             }, 1500);
           } else {
-            startActiveHistoryPoll(get);
+            startActiveHistoryPoll(get, set);
           }
         } else {
           // No message in final event - reload history to get complete data
           set({ streamingText: '', streamingMessage: null, pendingFinal: true });
           void get().loadHistory();
-          startActiveHistoryPoll(get);
+          startActiveHistoryPoll(get, set);
         }
         break;
       }

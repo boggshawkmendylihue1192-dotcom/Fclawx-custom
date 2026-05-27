@@ -5,7 +5,7 @@
  * are in the toolbar; messages render with markdown + streaming.
  */
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, ArrowDownToLine, Loader2, Sparkles } from 'lucide-react';
+import { AlertCircle, ArrowDownToLine, Clock3, Loader2, Sparkles } from 'lucide-react';
 import { useChatStore, type RawMessage } from '@/stores/chat';
 import { isInternalMessage } from '@/stores/chat/helpers';
 import { buildBaselineRunKey, getBaseline } from '@/stores/baseline-cache';
@@ -140,6 +140,49 @@ function generatedFileToTarget(file: GeneratedFile): FilePreviewTarget {
   };
 }
 
+function formatDurationMs(value?: number): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return '-';
+  if (value < 1000) return `${Math.round(value)}ms`;
+  if (value < 10_000) return `${(value / 1000).toFixed(1)}s`;
+  return `${Math.round(value / 1000)}s`;
+}
+
+function ChatDiagnosticsBadge({
+  diagnostics,
+}: {
+  diagnostics: NonNullable<ReturnType<typeof useChatStore.getState>['chatDiagnostics']>;
+}) {
+  const now = Date.now();
+  const firstEventMs = diagnostics.firstEventAt ? diagnostics.firstEventAt - diagnostics.startedAt : undefined;
+  const firstDeltaMs = diagnostics.firstDeltaAt ? diagnostics.firstDeltaAt - diagnostics.startedAt : undefined;
+  const historyPollMs = diagnostics.firstHistoryPollAt ? diagnostics.firstHistoryPollAt - diagnostics.startedAt : undefined;
+  const totalMs = (diagnostics.finalAt ?? now) - diagnostics.startedAt;
+  const statusText = diagnostics.status === 'sending'
+    ? '进行中'
+    : diagnostics.status === 'completed'
+      ? '已完成'
+      : diagnostics.status === 'aborted'
+        ? '已停止'
+        : '出错';
+
+  return (
+    <div
+      className="no-drag inline-flex max-w-full items-center gap-2 rounded-full border border-black/10 bg-background/90 px-3 py-1.5 text-[11px] font-medium text-muted-foreground shadow-sm backdrop-blur dark:border-white/10"
+      title="聊天速度诊断"
+      data-testid="chat-speed-diagnostics"
+    >
+      <Clock3 className="h-3.5 w-3.5 text-blue-500" />
+      <span className="text-foreground">{statusText}</span>
+      <span>总耗时 {formatDurationMs(totalMs)}</span>
+      <span>首事件 {formatDurationMs(firstEventMs)}</span>
+      <span>首内容 {formatDurationMs(firstDeltaMs)}</span>
+      <span>历史补偿 {formatDurationMs(historyPollMs)}</span>
+      <span>工具 {diagnostics.toolEventCount}</span>
+      <span>轮询 {diagnostics.historyPollCount}</span>
+    </div>
+  );
+}
+
 // Keep the last non-empty execution-graph snapshot per session/run outside
 // React state so `loadHistory` refreshes can still fall back to the previous
 // steps without tripping React's set-state-in-effect lint rule.
@@ -166,6 +209,7 @@ export function Chat() {
   const streamingTools = useChatStore((s) => s.streamingTools);
   const pendingFinal = useChatStore((s) => s.pendingFinal);
   const activeRunId = useChatStore((s) => s.activeRunId);
+  const chatDiagnostics = useChatStore((s) => s.chatDiagnostics);
   const sendMessage = useChatStore((s) => s.sendMessage);
   const abortRun = useChatStore((s) => s.abortRun);
   const clearError = useChatStore((s) => s.clearError);
@@ -800,8 +844,13 @@ export function Chat() {
       {/* Left column: chat */}
       <div className="flex min-w-0 flex-1 flex-col">
       {/* Toolbar */}
-      <div className="relative flex shrink-0 items-center justify-end px-4 py-2">
+      <div className="relative flex shrink-0 items-center justify-between gap-3 px-4 py-2">
         <div data-testid="chat-toolbar-drag-region" className="drag-region absolute inset-0 z-0" aria-hidden="true" />
+        <div className="no-drag relative z-10 min-w-0">
+          {chatDiagnostics && (
+            <ChatDiagnosticsBadge diagnostics={chatDiagnostics} />
+          )}
+        </div>
         <div data-testid="chat-toolbar-actions" className="no-drag relative z-10">
           <ChatToolbar
             questionDirectoryOpen={questionDirectoryVisible}

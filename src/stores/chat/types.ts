@@ -91,6 +91,22 @@ export interface ToolStatus {
   updatedAt: number;
 }
 
+export interface ChatRunDiagnostics {
+  runId?: string | null;
+  sessionKey: string;
+  startedAt: number;
+  firstEventAt?: number;
+  firstDeltaAt?: number;
+  firstHistoryPollAt?: number;
+  finalAt?: number;
+  lastEventAt?: number;
+  lastEventState?: string;
+  historyPollCount: number;
+  toolEventCount: number;
+  status: 'sending' | 'completed' | 'error' | 'aborted';
+  error?: string | null;
+}
+
 export interface ChatState {
   // Messages
   messages: RawMessage[];
@@ -110,6 +126,7 @@ export interface ChatState {
   lastUserMessageAt: number | null;
   /** Images collected from tool results, attached to the next assistant message */
   pendingToolImages: AttachedFileMeta[];
+  chatDiagnostics: ChatRunDiagnostics | null;
 
   // Sessions
   sessions: ChatSession[];

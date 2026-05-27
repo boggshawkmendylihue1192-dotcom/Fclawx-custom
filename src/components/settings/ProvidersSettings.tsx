@@ -59,6 +59,12 @@ import { subscribeHostEvent } from '@/lib/host-events';
 const inputClasses = 'h-[44px] rounded-xl font-mono text-meta bg-transparent border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:border-blue-500 shadow-sm transition-all text-foreground placeholder:text-foreground/40';
 const labelClasses = 'text-sm text-foreground/80 font-bold';
 type ArkMode = 'apikey' | 'codeplan';
+type ProviderHealthResult = {
+  ok: boolean;
+  durationMs: number;
+  checkedAt: number;
+  message: string;
+};
 
 function normalizeFallbackProviderIds(ids?: string[]): string[] {
   return Array.from(new Set((ids ?? []).filter(Boolean)));
@@ -176,6 +182,25 @@ function getAuthModeLabel(
     default:
       return authMode;
   }
+}
+
+function describeProviderHealthError(error?: string): string {
+  const raw = (error || '').trim();
+  const lower = raw.toLowerCase();
+  if (!raw) return '检测失败：没有返回明确错误。';
+  if (lower.includes('401') || lower.includes('auth') || lower.includes('invalid api key') || lower.includes('invalid token')) {
+    return `认证失败：API Key、OAuth 登录或运行时同步可能有问题。原始错误：${raw}`;
+  }
+  if (lower.includes('404') || lower.includes('model')) {
+    return `模型或接口不存在：请检查模型 ID、Base URL 和协议类型。原始错误：${raw}`;
+  }
+  if (lower.includes('429') || lower.includes('rate limit') || lower.includes('quota')) {
+    return `额度或限流问题：请检查余额、套餐或请求频率。原始错误：${raw}`;
+  }
+  if (lower.includes('timeout') || lower.includes('network') || lower.includes('fetch')) {
+    return `网络超时：请检查代理、Base URL 或服务商连通性。原始错误：${raw}`;
+  }
+  return `检测失败：${raw}`;
 }
 
 export function ProvidersSettings() {
@@ -419,6 +444,8 @@ function ProviderCard({
   const [validating, setValidating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [checkingHealth, setCheckingHealth] = useState(false);
+  const [healthResult, setHealthResult] = useState<ProviderHealthResult | null>(null);
   const [arkMode, setArkMode] = useState<ArkMode>('apikey');
   const [validationError, setValidationError] = useState<string | null>(null);
 
@@ -558,6 +585,48 @@ function ProviderCard({
     }
   };
 
+  const handleHealthCheck = async () => {
+    setCheckingHealth(true);
+    setHealthResult(null);
+    const startedAt = Date.now();
+    try {
+      const storedKey = await useProviderStore.getState().getAccountApiKey(account.id);
+      const probeKey = normalizeProviderApiKeyInput(storedKey || newKey)
+        || resolveProviderApiKeyForSave(account.vendorId, '');
+      if (!probeKey && account.authMode !== 'local') {
+        setHealthResult({
+          ok: false,
+          durationMs: Date.now() - startedAt,
+          checkedAt: Date.now(),
+          message: '未找到可用于检测的 API Key。请先保存密钥或完成 OAuth 登录。',
+        });
+        return;
+      }
+      const result = await onValidateKey(probeKey || 'local', {
+        baseUrl: baseUrl.trim() || account.baseUrl || undefined,
+        apiProtocol: (account.vendorId === 'custom' || account.vendorId === 'ollama') ? apiProtocol : undefined,
+      });
+      const durationMs = Date.now() - startedAt;
+      setHealthResult({
+        ok: result.valid,
+        durationMs,
+        checkedAt: Date.now(),
+        message: result.valid
+          ? `检测通过，用时 ${durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`}。`
+          : describeProviderHealthError(result.error),
+      });
+    } catch (error) {
+      setHealthResult({
+        ok: false,
+        durationMs: Date.now() - startedAt,
+        checkedAt: Date.now(),
+        message: describeProviderHealthError(String(error)),
+      });
+    } finally {
+      setCheckingHealth(false);
+    }
+  };
+
   const currentInputClasses = isDefault
     ? "h-[40px] rounded-xl font-mono text-meta bg-white dark:bg-card border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-blue-500/50 shadow-sm"
     : inputClasses;
@@ -631,6 +700,18 @@ function ProviderCard({
 
         {!isEditing && (
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <Button
+              data-testid={`provider-health-${account.id}`}
+              variant="ghost"
+              size="sm"
+              className="h-8 rounded-full px-3 text-xs text-muted-foreground hover:text-blue-600 hover:bg-white dark:hover:bg-card shadow-sm"
+              onClick={handleHealthCheck}
+              disabled={checkingHealth}
+              title="健康检测"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5 mr-1.5", checkingHealth && "animate-spin")} />
+              检测
+            </Button>
             {!isDefault && (
             <Button
               data-testid={`provider-set-default-${account.id}`}
@@ -677,6 +758,26 @@ function ProviderCard({
           </div>
         )}
       </div>
+
+      {healthResult && (
+        <div
+          data-testid={`provider-health-result-${account.id}`}
+          className={cn(
+            'mt-3 rounded-xl border px-3 py-2 text-xs',
+            healthResult.ok
+              ? 'border-green-500/20 bg-green-500/10 text-green-700 dark:text-green-400'
+              : 'border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-400',
+          )}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-semibold">{healthResult.ok ? '模型商可用' : '模型商异常'}</span>
+            <span className="text-current/70">
+              {healthResult.durationMs < 1000 ? `${healthResult.durationMs}ms` : `${(healthResult.durationMs / 1000).toFixed(1)}s`}
+            </span>
+          </div>
+          <p className="mt-1 break-words">{healthResult.message}</p>
+        </div>
+      )}
 
       {isEditing && (
         <div className="space-y-6 mt-4 pt-4 border-t border-black/5 dark:border-white/5">
