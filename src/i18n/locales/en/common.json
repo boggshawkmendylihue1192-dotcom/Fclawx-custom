@@ -11,6 +11,7 @@
         "settings": "Settings",
         "devConsole": "Developer Console",
         "models": "Models",
+        "runtime": "Runtime",
         "deleteSessionConfirm": "Delete \"{{label}}\"?",
         "openClawPage": "OpenClaw Page",
         "openClawDreams": "Dreams",

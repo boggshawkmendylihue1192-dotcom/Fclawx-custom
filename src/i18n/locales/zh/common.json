@@ -19,7 +19,8 @@
         "saveSessionRename": "保存会话标题",
         "cancelSessionRename": "取消重命名",
         "imageGeneration": "图像生成",
-        "workflows": "工作流"
+        "workflows": "工作流",
+        "runtime": "运行"
     },
     "actions": {
         "save": "保存",
