@@ -23,6 +23,7 @@ export interface TaskStep {
   parentId?: string;
   targetAgentId?: string;
   taskPreview?: string;
+  sessionKey?: string;
   /** Extracted URL for web_fetch tool, used to render a clickable link icon. */
   url?: string;
 }
@@ -224,7 +225,7 @@ function enrichToolStep(step: TaskStep, input: Record<string, unknown> | null | 
     ? pickStringField(input, ['agentId', 'agent_id', 'targetAgentId', 'target_agent_id', 'agent'])
     : undefined;
   const taskPreview = phase === 'delegate'
-    ? pickStringField(input, ['task', 'message', 'prompt', 'instruction', 'instructions'])
+    ? pickStringField(input, ['task', 'message', 'prompt', 'instruction', 'instructions', 'content', 'text'])
     : undefined;
   return {
     ...step,

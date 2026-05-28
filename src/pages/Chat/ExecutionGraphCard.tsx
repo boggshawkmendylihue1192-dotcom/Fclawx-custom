@@ -4,6 +4,9 @@ import {
   ChevronDown,
   ChevronRight,
   CircleDashed,
+  Clock,
+  Copy,
+  ExternalLink,
   FileText,
   GitBranch,
   Link,
@@ -16,7 +19,10 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { useChatStore } from '@/stores/chat';
 import type { TaskStep } from './task-visualization';
 
 interface ExecutionGraphCardProps {
@@ -35,6 +41,15 @@ interface ExecutionGraphCardProps {
 }
 
 const TOOL_ROW_EXTRA_INDENT_PX = 8;
+
+interface DelegationBoardItem {
+  agentId: string;
+  status: TaskStep['status'];
+  spawnCount: number;
+  yieldCount: number;
+  latestTask?: string;
+  sessionKey?: string;
+}
 
 function AnimatedDots({ className }: { className?: string }) {
   return (
@@ -66,6 +81,124 @@ function StepIcon({ step }: { step: TaskStep }) {
 function stepPhaseLabelKey(phase: TaskStep['phase']): string | null {
   if (!phase || phase === 'tool') return null;
   return `executionGraph.phase.${phase}`;
+}
+
+function buildDelegationBoard(steps: TaskStep[]): DelegationBoardItem[] {
+  const board = new Map<string, DelegationBoardItem>();
+  for (const step of steps) {
+    if (step.phase !== 'delegate') continue;
+    const agentId = step.targetAgentId || 'subagent';
+    const item = board.get(agentId) ?? {
+      agentId,
+      status: 'running' as TaskStep['status'],
+      spawnCount: 0,
+      yieldCount: 0,
+      latestTask: undefined,
+      sessionKey: step.sessionKey,
+    };
+
+    if (/sessions_spawn|spawn|subagent|delegate/i.test(step.label)) {
+      item.spawnCount += 1;
+      item.latestTask = step.taskPreview || item.latestTask;
+      item.sessionKey = step.sessionKey || item.sessionKey;
+      item.status = step.status === 'error' ? 'error' : item.status;
+    }
+    if (/sessions_yield|yield/i.test(step.label)) {
+      item.yieldCount += 1;
+      item.status = step.status === 'error' ? 'error' : 'completed';
+    }
+    if (step.kind === 'system' && step.status === 'completed' && item.status !== 'error') {
+      item.status = 'completed';
+      item.sessionKey = step.sessionKey || step.detail || item.sessionKey;
+    }
+    board.set(agentId, item);
+  }
+  return [...board.values()];
+}
+
+function DelegationBoard({ items, active }: { items: DelegationBoardItem[]; active: boolean }) {
+  const navigate = useNavigate();
+  const switchSession = useChatStore((state) => state.switchSession);
+  const abortRun = useChatStore((state) => state.abortRun);
+  if (items.length === 0) return null;
+  const completed = items.filter((item) => item.status === 'completed').length;
+  const failed = items.filter((item) => item.status === 'error').length;
+  const running = Math.max(0, items.length - completed - failed);
+
+  return (
+    <div className="ml-8 mt-2 rounded-xl border border-black/10 bg-black/[0.03] p-3 dark:border-white/10 dark:bg-white/[0.03]">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <Users className="h-4 w-4" />
+          并行智能体看板
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span>运行 {active ? running : Math.max(0, running)}</span>
+          <span>完成 {completed}</span>
+          <span>失败 {failed}</span>
+          {active && (
+            <button
+              type="button"
+              onClick={() => void abortRun()}
+              className="rounded-full bg-black/5 px-2 py-0.5 hover:text-foreground dark:bg-white/10"
+            >
+              停止本轮
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        {items.map((item) => (
+          <div key={item.agentId} className="rounded-lg border border-black/10 bg-white/40 p-2 dark:border-white/10 dark:bg-white/[0.03]">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0 flex items-center gap-2">
+                <GraphStatusIcon status={item.status} />
+                <span className="truncate text-sm font-medium text-foreground">@{item.agentId}</span>
+              </div>
+              <span className="shrink-0 rounded-full bg-black/5 px-2 py-0.5 text-2xs text-muted-foreground dark:bg-white/10">
+                {item.status === 'completed' ? '完成' : item.status === 'error' ? '失败' : '运行中'}
+              </span>
+            </div>
+            {item.latestTask && (
+              <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{item.latestTask}</p>
+            )}
+            <div className="mt-2 flex items-center gap-3 text-2xs text-muted-foreground">
+              <span>spawn {item.spawnCount}</span>
+              <span>yield {item.yieldCount}</span>
+              {item.status === 'running' && <Clock className="h-3 w-3" />}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard.writeText(item.latestTask || `@${item.agentId}`);
+                  toast.success('子任务已复制');
+                }}
+                className="inline-flex h-7 items-center gap-1 rounded-md bg-black/5 px-2 text-xs text-muted-foreground hover:text-foreground dark:bg-white/10"
+              >
+                <Copy className="h-3 w-3" />
+                复制
+              </button>
+              <button
+                type="button"
+                disabled={!item.sessionKey}
+                onClick={() => {
+                  if (!item.sessionKey) return;
+                  switchSession(item.sessionKey);
+                  navigate('/');
+                }}
+                className="inline-flex h-7 items-center gap-1 rounded-md bg-black/5 px-2 text-xs text-muted-foreground enabled:hover:text-foreground disabled:opacity-40 dark:bg-white/10"
+                title={item.sessionKey}
+              >
+                <ExternalLink className="h-3 w-3" />
+                记录
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function StepDetailCard({ step }: { step: TaskStep }) {
@@ -242,6 +375,7 @@ export function ExecutionGraphCard({
   const delegateCount = steps.filter((step) => step.phase === 'delegate').length;
   const processCount = steps.length - toolCount;
   const shouldShowTrailingThinking = active && !suppressThinking;
+  const delegationBoardItems = buildDelegationBoard(steps);
 
   if (!expanded) {
     return (
@@ -291,6 +425,8 @@ export function ExecutionGraphCard({
             </span>
           </div>
         </div>
+
+        <DelegationBoard items={delegationBoardItems} active={active} />
 
         {steps.map((step) => {
           const alignedIndentOffset = (

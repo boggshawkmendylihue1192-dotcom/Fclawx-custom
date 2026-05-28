@@ -566,6 +566,9 @@ export function Chat() {
             detail: completion.sessionKey,
             depth: 1,
             parentId: 'agent-run',
+            phase: 'delegate',
+            targetAgentId: completion.agentId,
+            sessionKey: completion.sessionKey,
           },
           ...childSteps,
         ];

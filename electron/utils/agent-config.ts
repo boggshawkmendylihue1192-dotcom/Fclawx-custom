@@ -165,7 +165,7 @@ const DEFAULT_TOOL_PERMISSIONS: AgentToolPermissions = {
   delegation: true,
 };
 
-const DELEGATION_TOOL_NAMES = ['sessions_spawn', 'sessions_yield', 'subagents', 'agents_list'];
+const DELEGATION_TOOL_NAMES = ['sessions_spawn', 'sessions_yield', 'sessions_send', 'subagents', 'agents_list'];
 const DEFAULT_DELEGATION_CONFIG: AgentDelegationConfig = {
   enabled: true,
   allowAgents: ['*'],
@@ -408,6 +408,7 @@ function buildToolPermissionsBlock(permissions: AgentToolPermissions): string {
     '',
     'Follow these permissions when deciding whether to use tools for this agent.',
     'When Delegation is enabled and a task benefits from another configured agent, inspect agents_list, use sessions_spawn with an explicit agentId, and call sessions_yield when you need child results before the final answer.',
+    'Use sessions_send only for controlled follow-up messages to an existing delegated session; avoid back-and-forth loops, repeated forwarding, or delegating outside the configured allowlist.',
     'Do not poll subagents, sessions_list, or sessions_history in a loop just to wait for completion; wait for completion events or yield once when needed.',
     '<!-- CLAWX_AGENT_TOOL_PERMISSIONS_END -->',
   ].join('\n');
