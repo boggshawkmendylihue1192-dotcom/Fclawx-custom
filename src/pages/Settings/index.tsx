@@ -11,6 +11,7 @@ import {
   ExternalLink,
   Copy,
   FileText,
+  Download,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -45,6 +46,43 @@ type ControlUiInfo = {
   token: string;
   port: number;
 };
+
+const SENSITIVE_KEY_RE = /(?:api[_-]?key|authorization|bearer|client[_-]?secret|password|refresh[_-]?token|secret|session|token)/i;
+const SENSITIVE_VALUE_RE = /\b(sk-[A-Za-z0-9_-]{8,}|[A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}|Bearer\s+[A-Za-z0-9._-]{12,})\b/g;
+
+function redactDiagnostics(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(redactDiagnostics);
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, nestedValue]) => [
+        key,
+        SENSITIVE_KEY_RE.test(key) ? '[redacted]' : redactDiagnostics(nestedValue),
+      ]),
+    );
+  }
+
+  if (typeof value === 'string') {
+    return value.replace(SENSITIVE_VALUE_RE, '[redacted]');
+  }
+
+  return value;
+}
+
+function downloadJsonFile(filename: string, payload: unknown): void {
+  const json = JSON.stringify(redactDiagnostics(payload), null, 2);
+  const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
 
 export function Settings() {
   const { t } = useTranslation('settings');
@@ -97,6 +135,7 @@ export function Settings() {
   const showCliTools = true;
   const [showLogs, setShowLogs] = useState(false);
   const [logContent, setLogContent] = useState('');
+  const [diagnosticExporting, setDiagnosticExporting] = useState(false);
   const [doctorRunningMode, setDoctorRunningMode] = useState<'diagnose' | 'fix' | null>(null);
   const [doctorResult, setDoctorResult] = useState<{
     mode: 'diagnose' | 'fix';
@@ -130,6 +169,49 @@ export function Settings() {
       }
     } catch {
       // ignore
+    }
+  };
+
+  const handleExportDiagnosticBundle = async () => {
+    setDiagnosticExporting(true);
+    try {
+      const capturedAt = new Date();
+      const [appVersion, gatewaySnapshot, logFiles, appLogTail] = await Promise.all([
+        invokeIpc<string>('app:version').catch(() => currentVersion),
+        hostApiFetch<unknown>('/api/diagnostics/gateway-snapshot').catch((error) => ({
+          error: toUserMessage(error) || String(error),
+        })),
+        hostApiFetch<{ files: string[] }>('/api/logs/files').catch((error) => ({
+          files: [],
+          error: toUserMessage(error) || String(error),
+        })),
+        hostApiFetch<{ content: string }>('/api/logs?tailLines=300').catch((error) => ({
+          content: '',
+          error: toUserMessage(error) || String(error),
+        })),
+      ]);
+
+      downloadJsonFile(`clawx-diagnostics-${capturedAt.toISOString().replace(/[:.]/g, '-')}.json`, {
+        capturedAt: capturedAt.toISOString(),
+        app: {
+          version: appVersion,
+          rendererVersion: currentVersion,
+          platform: window.electron.platform,
+          language,
+        },
+        gatewayStatus,
+        gatewaySnapshot,
+        logs: {
+          files: logFiles,
+          appTail: appLogTail,
+        },
+        uiTelemetry: getUiTelemetrySnapshot(200),
+      });
+      toast.success('诊断包已导出，里面的密钥和 Token 已脱敏');
+    } catch (error) {
+      toast.error(`导出诊断包失败：${toUserMessage(error) || String(error)}`);
+    } finally {
+      setDiagnosticExporting(false);
     }
   };
 
@@ -589,6 +671,10 @@ export function Settings() {
                   <Button variant="outline" size="sm" onClick={handleShowLogs} className="rounded-full h-8 px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5">
                     <FileText className="h-3.5 w-3.5 mr-1.5" />
                     {t('gateway.logs')}
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={handleExportDiagnosticBundle} disabled={diagnosticExporting} className="rounded-full h-8 px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5">
+                    <Download className={`h-3.5 w-3.5 mr-1.5${diagnosticExporting ? ' animate-pulse' : ''}`} />
+                    {diagnosticExporting ? '正在导出' : '导出诊断包'}
                   </Button>
                 </div>
               </div>
