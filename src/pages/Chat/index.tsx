@@ -5,7 +5,7 @@
  * are in the toolbar; messages render with markdown + streaming.
  */
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, ArrowDownToLine, Clock3, Loader2, Sparkles } from 'lucide-react';
+import { AlertCircle, ArrowDownToLine, Clock3, Copy, Loader2, Sparkles } from 'lucide-react';
 import { useChatStore, type RawMessage } from '@/stores/chat';
 import { isInternalMessage } from '@/stores/chat/helpers';
 import { buildBaselineRunKey, getBaseline } from '@/stores/baseline-cache';
@@ -149,8 +149,10 @@ function formatDurationMs(value?: number): string {
 
 function ChatDiagnosticsBadge({
   diagnostics,
+  onCopy,
 }: {
   diagnostics: NonNullable<ReturnType<typeof useChatStore.getState>['chatDiagnostics']>;
+  onCopy?: () => void;
 }) {
   const now = Date.now();
   const firstEventMs = diagnostics.firstEventAt ? diagnostics.firstEventAt - diagnostics.startedAt : undefined;
@@ -179,8 +181,59 @@ function ChatDiagnosticsBadge({
       <span>历史补偿 {formatDurationMs(historyPollMs)}</span>
       <span>工具 {diagnostics.toolEventCount}</span>
       <span>轮询 {diagnostics.historyPollCount}</span>
+      {onCopy && (
+        <button
+          type="button"
+          onClick={onCopy}
+          className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          aria-label="????????"
+          title="????????"
+        >
+          <Copy className="h-3.5 w-3.5" strokeWidth={2} />
+        </button>
+      )}
     </div>
   );
+}
+
+function buildChatDiagnosticsReport(input: {
+  diagnostics: NonNullable<ReturnType<typeof useChatStore.getState>['chatDiagnostics']>;
+  gatewayState: string;
+  gatewayReady?: boolean;
+  sessionKey: string | null;
+  agentId: string;
+}): string {
+  const { diagnostics, gatewayState, gatewayReady, sessionKey, agentId } = input;
+  const firstEventMs = diagnostics.firstEventAt ? diagnostics.firstEventAt - diagnostics.startedAt : undefined;
+  const firstDeltaMs = diagnostics.firstDeltaAt ? diagnostics.firstDeltaAt - diagnostics.startedAt : undefined;
+  const historyPollMs = diagnostics.firstHistoryPollAt ? diagnostics.firstHistoryPollAt - diagnostics.startedAt : undefined;
+  const totalMs = (diagnostics.finalAt ?? Date.now()) - diagnostics.startedAt;
+  const possibleCause = !diagnostics.firstEventAt
+    ? '还没有收到 Gateway 事件，优先检查网关、模型服务、网络/DNS。'
+    : firstDeltaMs && firstDeltaMs > 15_000
+      ? '首内容较慢，常见原因是模型排队、网络延迟、工具调用或上下文较长。'
+      : diagnostics.toolEventCount > 0
+        ? '本轮包含工具调用，耗时会叠加工具执行和模型继续推理。'
+        : '本轮链路正常，主要耗时大概率来自模型服务端生成。';
+
+  return [
+    'ClawX 聊天速度诊断',
+    `时间: ${new Date().toLocaleString()}`,
+    `会话: ${sessionKey ?? 'unknown'}`,
+    `智能体: ${agentId}`,
+    `运行 ID: ${diagnostics.runId ?? 'unknown'}`,
+    `状态: ${diagnostics.status}`,
+    `Gateway: ${gatewayState} / ${gatewayReady ? 'ready' : 'not-ready'}`,
+    `总耗时: ${formatDurationMs(totalMs)}`,
+    `首事件: ${formatDurationMs(firstEventMs)}`,
+    `首内容: ${formatDurationMs(firstDeltaMs)}`,
+    `首次历史补偿: ${formatDurationMs(historyPollMs)}`,
+    `工具事件数: ${diagnostics.toolEventCount}`,
+    `历史轮询数: ${diagnostics.historyPollCount}`,
+    `最后事件: ${diagnostics.lastEventState ?? '-'}`,
+    `错误: ${diagnostics.error ?? '-'}`,
+    `判断: ${possibleCause}`,
+  ].join('\n');
 }
 
 // Keep the last non-empty execution-graph snapshot per session/run outside
@@ -719,6 +772,22 @@ export function Chat() {
   }, [userRunCards, messages]);
   const streamingReplyText = userRunCards.find((card) => card.streamingReplyText != null)?.streamingReplyText ?? null;
 
+  const copyChatDiagnostics = useCallback(async () => {
+    if (!chatDiagnostics) return;
+    try {
+      await navigator.clipboard.writeText(buildChatDiagnosticsReport({
+        diagnostics: chatDiagnostics,
+        gatewayState: gatewayStatus.state,
+        gatewayReady: gatewayStatus.gatewayReady,
+        sessionKey: currentSessionKey,
+        agentId: currentAgentId,
+      }));
+      toast.success('聊天速度诊断已复制');
+    } catch (copyError) {
+      toast.error(`复制失败：${String(copyError)}`);
+    }
+  }, [chatDiagnostics, currentAgentId, currentSessionKey, gatewayStatus.gatewayReady, gatewayStatus.state]);
+
   // Derive the set of run keys that should be auto-collapsed (run finished
   // streaming or has a reply override) during render instead of in an effect,
   // so we don't violate react-hooks/set-state-in-effect. Explicit user toggles
@@ -848,7 +917,7 @@ export function Chat() {
         <div data-testid="chat-toolbar-drag-region" className="drag-region absolute inset-0 z-0" aria-hidden="true" />
         <div className="no-drag relative z-10 min-w-0">
           {chatDiagnostics && (
-            <ChatDiagnosticsBadge diagnostics={chatDiagnostics} />
+            <ChatDiagnosticsBadge diagnostics={chatDiagnostics} onCopy={copyChatDiagnostics} />
           )}
         </div>
         <div data-testid="chat-toolbar-actions" className="no-drag relative z-10">

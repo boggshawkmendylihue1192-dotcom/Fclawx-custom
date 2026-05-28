@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
+  Copy,
   Gauge,
   Network,
   RefreshCw,
@@ -15,6 +16,7 @@ import { hostApiFetch } from '@/lib/host-api';
 import { cn } from '@/lib/utils';
 import { useGatewayStore } from '@/stores/gateway';
 import type { UsageHistoryEntry } from '@/pages/Models/usage-history';
+import { toast } from 'sonner';
 
 interface ChannelAccountItem {
   accountId: string;
@@ -156,6 +158,96 @@ function summarizeUsage(entries: UsageHistoryEntry[]) {
   return { totals, topModels };
 }
 
+function summarizeUsageProviders(entries: UsageHistoryEntry[]) {
+  const byProvider = new Map<string, { count: number; tokens: number; errors: number }>();
+  for (const entry of entries) {
+    const provider = entry.provider || 'Unknown';
+    const current = byProvider.get(provider) ?? { count: 0, tokens: 0, errors: 0 };
+    current.count += 1;
+    current.tokens += entry.totalTokens || 0;
+    if (entry.usageStatus === 'error') current.errors += 1;
+    byProvider.set(provider, current);
+  }
+  return Array.from(byProvider.entries())
+    .map(([provider, value]) => ({ provider, ...value }))
+    .sort((a, b) => b.tokens - a.tokens)
+    .slice(0, 5);
+}
+
+function buildRuntimeFindings(input: {
+  gatewayStatus: string;
+  gatewayReady?: boolean;
+  healthState: string | undefined;
+  gatewayReasons: string[];
+  channelCounts: Record<ChannelAccountItem['status'] | 'total', number>;
+  usageHistory: UsageHistoryEntry[];
+  gatewaySummary?: GatewayHealthSummary;
+}): string[] {
+  const findings: string[] = [];
+  const { gatewayStatus, gatewayReady, healthState, gatewayReasons, channelCounts, usageHistory, gatewaySummary } = input;
+
+  if (gatewayStatus !== 'running') {
+    findings.push('网关未运行，聊天会卡在连接或发送前。');
+  } else if (!gatewayReady) {
+    findings.push('网关进程已启动，但 RPC 还没就绪，首次请求可能变慢。');
+  }
+
+  if (healthState && healthState !== 'healthy') {
+    findings.push(`网关健康状态为 ${healthState}，建议先看诊断原因和日志。`);
+  }
+  if ((gatewaySummary?.consecutiveHeartbeatMisses ?? 0) > 0) {
+    findings.push('检测到心跳丢失，可能是本地进程忙、网络代理或网关阻塞。');
+  }
+  if ((gatewaySummary?.consecutiveRpcFailures ?? 0) > 0) {
+    findings.push(`连续 RPC 失败 ${gatewaySummary?.consecutiveRpcFailures} 次，优先检查 provider/OAuth/API Key。`);
+  }
+  if (channelCounts.degraded + channelCounts.error > 0) {
+    findings.push('存在异常通道账号，消息平台转发可能影响整体响应。');
+  }
+  if (usageHistory.some((entry) => entry.usageStatus === 'error')) {
+    findings.push('最近用量记录里出现模型计量错误，可能与 provider 响应或模型返回格式有关。');
+  }
+  if (gatewayReasons.some((reason) => /dns|name|resolve|network|timeout/i.test(reason))) {
+    findings.push('诊断原因里出现网络/DNS/超时信号，回复慢可能和线路稳定性有关。');
+  }
+
+  if (findings.length === 0) {
+    findings.push('当前运行态没有明显本地异常，回复慢更可能来自模型服务端排队、上下文长度或工具执行。');
+  }
+  return findings;
+}
+
+function buildRuntimeReport(input: {
+  snapshot: GatewayDiagnosticSnapshot | null;
+  usageHistory: UsageHistoryEntry[];
+  gatewayStatus: ReturnType<typeof useGatewayStore.getState>['status'];
+  healthState: string | undefined;
+  gatewayReasons: string[];
+  channelCounts: Record<ChannelAccountItem['status'] | 'total', number>;
+  findings: string[];
+}): string {
+  const { snapshot, usageHistory, gatewayStatus, healthState, gatewayReasons, channelCounts, findings } = input;
+  const usageSummary = summarizeUsage(usageHistory);
+  const providers = summarizeUsageProviders(usageHistory);
+  return [
+    'ClawX 运行诊断报告',
+    `时间: ${new Date().toLocaleString()}`,
+    `Gateway: ${gatewayStatus.state} / ${gatewayStatus.gatewayReady ? 'ready' : 'not-ready'}`,
+    `PID: ${gatewayStatus.pid ?? 'unknown'}`,
+    `端口: ${gatewayStatus.port || 'unknown'}`,
+    `运行时间: ${formatDuration(gatewayStatus.uptime)}`,
+    `健康: ${healthState ?? 'unknown'}`,
+    `通道: connected=${channelCounts.connected}, degraded=${channelCounts.degraded}, error=${channelCounts.error}, total=${channelCounts.total}`,
+    `最近用量: records=${usageHistory.length}, tokens=${usageSummary.totals.tokens}, cost=$${usageSummary.totals.cost.toFixed(4)}`,
+    `Provider: ${providers.map((item) => `${item.provider}:${item.tokens}/${item.count}`).join(', ') || '-'}`,
+    `诊断原因: ${gatewayReasons.join(', ') || '-'}`,
+    '判断:',
+    ...findings.map((finding) => `- ${finding}`),
+    '最新 Gateway 错误:',
+    pickLatestLogLine(snapshot?.gatewayErrLogTail),
+  ].join('\n');
+}
+
 function countChannelStatuses(channels: ChannelGroupItem[]) {
   return channels.reduce(
     (acc, group) => {
@@ -265,10 +357,37 @@ export function Runtime() {
 
   const channelCounts = useMemo(() => countChannelStatuses(snapshot?.channels ?? []), [snapshot?.channels]);
   const usageSummary = useMemo(() => summarizeUsage(usageHistory), [usageHistory]);
+  const providerSummary = useMemo(() => summarizeUsageProviders(usageHistory), [usageHistory]);
   const gatewaySummary = snapshot?.gateway;
   const healthState = gatewaySummary?.state ?? (gatewayHealth?.ok ? 'healthy' : 'degraded');
   const gatewayStateLabel = GATEWAY_STATE_LABELS[gatewayStatus.state] ?? gatewayStatus.state;
   const gatewayReasons = gatewaySummary?.reasons ?? (gatewayHealth?.error ? [gatewayHealth.error] : []);
+  const runtimeFindings = useMemo(() => buildRuntimeFindings({
+    gatewayStatus: gatewayStatus.state,
+    gatewayReady: gatewayStatus.gatewayReady,
+    healthState,
+    gatewayReasons,
+    channelCounts,
+    usageHistory,
+    gatewaySummary,
+  }), [channelCounts, gatewayReasons, gatewayStatus.gatewayReady, gatewayStatus.state, gatewaySummary, healthState, usageHistory]);
+
+  const copyRuntimeReport = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(buildRuntimeReport({
+        snapshot,
+        usageHistory,
+        gatewayStatus,
+        healthState,
+        gatewayReasons,
+        channelCounts,
+        findings: runtimeFindings,
+      }));
+      toast.success('运行诊断报告已复制');
+    } catch (copyError) {
+      toast.error(`复制失败：${String(copyError)}`);
+    }
+  }, [channelCounts, gatewayReasons, gatewayStatus, healthState, runtimeFindings, snapshot, usageHistory]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -279,10 +398,16 @@ export function Runtime() {
             最近刷新：{lastUpdatedAt ? formatTime(lastUpdatedAt) : '暂无'}
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loadState === 'loading'}>
-          <RefreshCw className={cn('mr-2 h-4 w-4', loadState === 'loading' && 'animate-spin')} strokeWidth={2} />
-          刷新
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => void copyRuntimeReport()}>
+            <Copy className="mr-2 h-4 w-4" strokeWidth={2} />
+            ????
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loadState === 'loading'}>
+            <RefreshCw className={cn('mr-2 h-4 w-4', loadState === 'loading' && 'animate-spin')} strokeWidth={2} />
+            刷新
+          </Button>
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-6">
@@ -317,6 +442,36 @@ export function Runtime() {
             detail={`${usageHistory.length} 条记录 · $${usageSummary.totals.cost.toFixed(4)}`}
             icon={Gauge}
           />
+        </div>
+
+        <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.65fr)]">
+          <Section title="性能判断" icon={Gauge}>
+            <div className="space-y-2">
+              {runtimeFindings.map((finding) => (
+                <div key={finding} className="flex gap-2 text-sm text-muted-foreground">
+                  <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+                  <span>{finding}</span>
+                </div>
+              ))}
+            </div>
+          </Section>
+
+          <Section title="Provider 分布" icon={Server}>
+            <div className="space-y-3">
+              {providerSummary.length > 0 ? providerSummary.map((item) => (
+                <div key={item.provider}>
+                  <div className="mb-1 flex items-center justify-between gap-3 text-sm">
+                    <span className="truncate font-medium">{item.provider}</span>
+                    <span className="text-muted-foreground">{formatNumber(item.tokens)}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>{item.count} 次请求</span>
+                    <span>{item.errors > 0 ? `${item.errors} 次计量异常` : '计量正常'}</span>
+                  </div>
+                </div>
+              )) : <div className="text-sm text-muted-foreground">暂无 Provider 用量</div>}
+            </div>
+          </Section>
         </div>
 
         <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.8fr)]">
