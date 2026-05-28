@@ -18,6 +18,7 @@ const LOAD_HISTORY_MIN_INTERVAL_MS = 800;
 let lastLoadSessionsAt = 0;
 let lastLoadHistoryAt = 0;
 let cronRepairTriggeredThisSession = false;
+let chatStoreImportPromise: Promise<typeof import('./chat')> | null = null;
 
 interface GatewayState {
   status: GatewayStatus;
@@ -42,53 +43,17 @@ function pruneGatewayEventDedupe(now: number): void {
   }
 }
 
-function stableGatewayEventFingerprint(value: unknown): string {
-  let hash = 2166136261;
-  let length = 0;
-
-  const add = (part: string): void => {
-    length += part.length;
-    for (let i = 0; i < part.length; i += 1) {
-      hash ^= part.charCodeAt(i);
-      hash = Math.imul(hash, 16777619) >>> 0;
-    }
-  };
-
-  const visit = (entry: unknown): void => {
-    if (entry === undefined) {
-      add('u:');
-      return;
-    }
-    if (entry === null || typeof entry !== 'object') {
-      add(`${typeof entry}:${JSON.stringify(entry)};`);
-      return;
-    }
-    if (Array.isArray(entry)) {
-      add('[');
-      for (const item of entry) visit(item);
-      add(']');
-      return;
-    }
-
-    add('{');
-    for (const [key, child] of Object.entries(entry as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right))) {
-      add(`${JSON.stringify(key)}:`);
-      visit(child);
-    }
-    add('}');
-  };
-
-  visit(value);
-  return `${hash.toString(36)}:${length.toString(36)}`;
-}
-
 function buildGatewayEventDedupeKey(event: Record<string, unknown>): string | null {
   const runId = event.runId != null ? String(event.runId) : '';
   const sessionKey = event.sessionKey != null ? String(event.sessionKey) : '';
   const seq = event.seq != null ? String(event.seq) : '';
   const state = event.state != null ? String(event.state) : '';
   if (state === 'delta' && !seq) {
-    return ['delta-nosq', runId, sessionKey, stableGatewayEventFingerprint(event.message ?? event)].join('|');
+    // Streaming deltas often contain the full accumulated assistant message.
+    // Hashing that growing payload on every token adds avoidable UI-thread work.
+    // The chat store already handles idempotent replacement for no-seq deltas,
+    // so only seq-backed events need generic dedupe here.
+    return null;
   }
   if (runId || sessionKey || seq || state) {
     return [runId, sessionKey, seq, state].join('|');
@@ -103,6 +68,21 @@ function buildGatewayEventDedupeKey(event: Record<string, unknown>): string | nu
     }
   }
   return null;
+}
+
+function getChatStoreModule(): Promise<typeof import('./chat')> {
+  if (!chatStoreImportPromise) {
+    chatStoreImportPromise = import('./chat');
+  }
+  return chatStoreImportPromise;
+}
+
+function withChatStore(
+  callback: (module: typeof import('./chat')) => void,
+): void {
+  getChatStoreModule()
+    .then(callback)
+    .catch(() => {});
 }
 
 function getMessageIdDedupeKey(event: Record<string, unknown>): string | null {
@@ -156,16 +136,14 @@ function maybeLoadHistory(
 /** Bump sidebar ordering when any session receives gateway traffic (e.g. Feishu DM). */
 function touchSessionActivity(sessionKey: string | null | undefined, activityMs = Date.now()): void {
   if (!sessionKey) return;
-  import('./chat')
-    .then(({ useChatStore }) => {
+  withChatStore(({ useChatStore }) => {
       useChatStore.setState((state) => ({
         sessionLastActivity: {
           ...state.sessionLastActivity,
           [sessionKey]: Math.max(state.sessionLastActivity[sessionKey] ?? 0, activityMs),
         },
       }));
-    })
-    .catch(() => {});
+    });
 }
 
 function handleGatewayNotification(notification: { method?: string; params?: Record<string, unknown> } | undefined): void {
@@ -190,11 +168,9 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
       message: p.message ?? data.message,
     };
     if (shouldProcessGatewayEvent(normalizedEvent)) {
-      import('./chat')
-        .then(({ useChatStore }) => {
+      withChatStore(({ useChatStore }) => {
           useChatStore.getState().handleChatEvent(normalizedEvent);
-        })
-        .catch(() => {});
+        });
     }
   }
 
@@ -205,8 +181,7 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
     touchSessionActivity(resolvedSessionKeyForActivity);
   }
   if (phase === 'started' && runId != null && sessionKey != null) {
-    import('./chat')
-      .then(({ useChatStore }) => {
+    withChatStore(({ useChatStore }) => {
         const state = useChatStore.getState();
         const resolvedSessionKey = String(sessionKey);
         const shouldRefreshSessions =
@@ -221,8 +196,7 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
           runId,
           sessionKey: resolvedSessionKey,
         });
-      })
-      .catch(() => {});
+      });
   }
 
   // `phase: 'end'` fires per streaming message (including intermediate tool
@@ -236,8 +210,7 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
   const isRunFailure = phase === 'error' || phase === 'failed' || phase === 'aborted' || phase === 'cancelled';
   const isRunTerminal = isRunCompletion || isRunFailure;
   if (isPerMessageEnd || isRunTerminal) {
-    import('./chat')
-      .then(({ useChatStore, syncCachedSessionRunIdle }) => {
+    withChatStore(({ useChatStore, syncCachedSessionRunIdle }) => {
         const state = useChatStore.getState();
         const resolvedSessionKey = sessionKey != null ? String(sessionKey) : null;
         const shouldRefreshSessions = resolvedSessionKey != null && (
@@ -284,13 +257,12 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
             syncCachedSessionRunIdle(resolvedSessionKey);
           }
         }
-      })
-      .catch(() => {});
+      });
   }
 }
 
 function handleGatewayChatMessage(data: unknown): void {
-  import('./chat').then(({ useChatStore }) => {
+  withChatStore(({ useChatStore }) => {
     const chatData = data as Record<string, unknown>;
     const payload = ('message' in chatData && typeof chatData.message === 'object')
       ? chatData.message as Record<string, unknown>
@@ -309,7 +281,7 @@ function handleGatewayChatMessage(data: unknown): void {
     };
     if (!shouldProcessGatewayEvent(normalized)) return;
     useChatStore.getState().handleChatEvent(normalized);
-  }).catch(() => {});
+  });
 }
 
 function mapChannelStatus(status: string): 'connected' | 'connecting' | 'disconnected' | 'error' {

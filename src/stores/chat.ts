@@ -124,6 +124,7 @@ const CHAT_EVENT_DEDUPE_TTL_MS = 30_000;
 const HISTORY_PAGE_SIZE = 200;
 const HISTORY_MAX_RENDERED_MESSAGES = 1_000;
 const _chatEventDedupe = new Map<string, number>();
+const _capturedBaselineToolCallKeys = new Set<string>();
 const OPTIMISTIC_USER_MESSAGE_TTL_MS = 30 * 60 * 1000;
 /** Max skew between the renderer optimistic send time and Gateway transcript timestamps. */
 const OPTIMISTIC_USER_TIMESTAMP_MATCH_MS = 120_000;
@@ -1848,6 +1849,9 @@ function captureBaselinesFromMessage(message: unknown, runKey: string | null): v
   if (!runKey || !message || typeof message !== 'object') return;
   const content = (message as Record<string, unknown>).content;
   if (!Array.isArray(content)) return;
+  if (_capturedBaselineToolCallKeys.size > 500) {
+    _capturedBaselineToolCallKeys.clear();
+  }
   for (const block of content as ContentBlock[]) {
     if (block.type !== 'tool_use' && block.type !== 'toolCall') continue;
     const name = typeof block.name === 'string' ? block.name : '';
@@ -1855,7 +1859,14 @@ function captureBaselinesFromMessage(message: unknown, runKey: string | null): v
     if (!BASELINE_WRITE_TOOLS.has(name) && !BASELINE_EDIT_TOOLS.has(name)) continue;
     const input = block.input ?? block.arguments;
     const filePath = pickFilePathFromInput(input);
-    if (filePath) captureBaseline(runKey, filePath);
+    if (!filePath) continue;
+    const toolCallId = typeof block.id === 'string' ? block.id : '';
+    if (toolCallId) {
+      const baselineKey = `${runKey}|${toolCallId}|${name}|${filePath}`;
+      if (_capturedBaselineToolCallKeys.has(baselineKey)) continue;
+      _capturedBaselineToolCallKeys.add(baselineKey);
+    }
+    captureBaseline(runKey, filePath);
   }
 }
 
