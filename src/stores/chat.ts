@@ -118,6 +118,31 @@ const _sessionRunStateCache = new Map<string, SessionRunState>();
 const SESSION_LOAD_MIN_INTERVAL_MS = 1_200;
 const HISTORY_LOAD_MIN_INTERVAL_MS = 800;
 const HISTORY_POLL_SILENCE_WINDOW_MS = 2_500;
+const DELETED_SESSIONS_STORAGE_KEY = 'clawx.deletedSessionKeys.v1';
+const DELETED_SESSIONS_MAX = 2_000;
+
+function readDeletedSessionKeys(): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(DELETED_SESSIONS_STORAGE_KEY) || '[]') as unknown;
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((value): value is string => typeof value === 'string' && value.startsWith('agent:')));
+  } catch {
+    return new Set();
+  }
+}
+
+function rememberDeletedSessionKey(sessionKey: string): void {
+  if (typeof window === 'undefined' || !sessionKey.startsWith('agent:')) return;
+  const deletedKeys = readDeletedSessionKeys();
+  deletedKeys.add(sessionKey);
+  const next = Array.from(deletedKeys).slice(-DELETED_SESSIONS_MAX);
+  try {
+    window.localStorage.setItem(DELETED_SESSIONS_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Best-effort only: disk deletion still happens through the host API.
+  }
+}
 const HISTORY_POLL_START_DELAY_MS = 1_200;
 const HISTORY_POLL_INTERVAL_MS = 2_500;
 const CHAT_EVENT_DEDUPE_TTL_MS = 30_000;
@@ -2313,6 +2338,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           includeLastMessage: true,
         });
         if (data) {
+          const deletedSessionKeys = readDeletedSessionKeys();
           const rawSessions = Array.isArray(data.sessions) ? data.sessions : [];
           const sessions: ChatSession[] = rawSessions.map((s: Record<string, unknown>) => ({
             key: String(s.key || ''),
@@ -2325,7 +2351,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             updatedAt: parseSessionUpdatedAtMs(s.updatedAt),
             status: parseSessionStatus(s.status),
             hasActiveRun: typeof s.hasActiveRun === 'boolean' ? s.hasActiveRun : undefined,
-          })).filter((s: ChatSession) => s.key);
+          })).filter((s: ChatSession) => s.key && !deletedSessionKeys.has(s.key));
 
           const canonicalBySuffix = new Map<string, string>();
           for (const session of sessions) {
@@ -2510,6 +2536,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // contributing to the Dashboard token-usage history.
 
   deleteSession: async (key: string) => {
+    rememberDeletedSessionKey(key);
     clearCachedSessionHistory(key);
     clearCachedSessionRunState(key);
     clearSessionLabelHydrationTracking(key);

@@ -14,6 +14,34 @@ import {
   isSessionLabelHydrationReady,
 } from './session-label-hydration';
 
+const DELETED_SESSIONS_STORAGE_KEY = 'clawx.deletedSessionKeys.v1';
+const DELETED_SESSIONS_MAX = 2_000;
+
+function readDeletedSessionKeys(): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(DELETED_SESSIONS_STORAGE_KEY) || '[]') as unknown;
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((value): value is string => typeof value === 'string' && value.startsWith('agent:')));
+  } catch {
+    return new Set();
+  }
+}
+
+function rememberDeletedSessionKey(sessionKey: string): void {
+  if (typeof window === 'undefined' || !sessionKey.startsWith('agent:')) return;
+  const deletedKeys = readDeletedSessionKeys();
+  deletedKeys.add(sessionKey);
+  try {
+    window.localStorage.setItem(
+      DELETED_SESSIONS_STORAGE_KEY,
+      JSON.stringify(Array.from(deletedKeys).slice(-DELETED_SESSIONS_MAX)),
+    );
+  } catch {
+    // Disk deletion still happens through IPC; this tombstone is best-effort.
+  }
+}
+
 function getAgentIdFromSessionKey(sessionKey: string): string {
   if (!sessionKey.startsWith('agent:')) return 'main';
   const [, agentId] = sessionKey.split(':');
@@ -121,6 +149,7 @@ export function createSessionActions(
 
         if (result.success && result.result) {
           const data = result.result;
+          const deletedSessionKeys = readDeletedSessionKeys();
           const rawSessions = Array.isArray(data.sessions) ? data.sessions : [];
           const sessions: ChatSession[] = rawSessions.map((s: Record<string, unknown>) => ({
             key: String(s.key || ''),
@@ -133,7 +162,7 @@ export function createSessionActions(
             updatedAt: parseSessionUpdatedAtMs(s.updatedAt),
             status: parseSessionStatus(s.status),
             hasActiveRun: typeof s.hasActiveRun === 'boolean' ? s.hasActiveRun : undefined,
-          })).filter((s: ChatSession) => s.key);
+          })).filter((s: ChatSession) => s.key && !deletedSessionKeys.has(s.key));
 
           const canonicalBySuffix = new Map<string, string>();
           for (const session of sessions) {
@@ -316,6 +345,7 @@ export function createSessionActions(
     // contributing to the Dashboard token-usage history.
 
     deleteSession: async (key: string) => {
+      rememberDeletedSessionKey(key);
       clearSessionLabelHydrationTracking(key);
       clearPendingOptimisticUserMessages(key);
       // Hard-delete the session's JSONL transcript on disk.
