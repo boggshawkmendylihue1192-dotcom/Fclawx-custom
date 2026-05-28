@@ -38,15 +38,24 @@ const PATCHED_MACRO = [
   '    ClearErrors',
   '    Nsis7z::Extract "${FILE}"',
   '    IfErrors 0 clawx_extract_done',
-  '    ${if} $R9 < 3',
-  '      DetailPrint "Releasing file locks before retry..."',
-  '      nsExec::ExecToStack \'taskkill /F /T /IM "${APP_EXECUTABLE_FILENAME}"\'',
-  '      Pop $0',
-  '      Pop $1',
-  '      nsExec::ExecToStack \'taskkill /F /IM openclaw-gateway.exe\'',
-  '      Pop $0',
-  '      Pop $1',
-  '      Sleep 3000',
+  '    DetailPrint "Extraction was blocked by file locks; closing old ClawX processes before retry..."',
+  '    SetOutPath $TEMP',
+  '    nsExec::ExecToStack \'taskkill /F /T /IM "${APP_EXECUTABLE_FILENAME}"\'',
+  '    Pop $0',
+  '    Pop $1',
+  '    nsExec::ExecToStack \'taskkill /F /IM openclaw-gateway.exe\'',
+  '    Pop $0',
+  '    Pop $1',
+  '    nsExec::ExecToStack `"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-CimInstance -ClassName Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.StartsWith(\'$INSTDIR\', [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"`',
+  '    Pop $0',
+  '    Pop $1',
+  '    Sleep 5000',
+  '    ${if} $R9 < 8',
+  '      Goto clawx_extract_attempt',
+  '    ${endIf}',
+  '    ${if} ${isUpdated}',
+  '      DetailPrint "Auto-update is still waiting for Windows to release old ClawX files; retrying without showing a blocking dialog..."',
+  '      Sleep 8000',
   '      Goto clawx_extract_attempt',
   '    ${endIf}',
   '    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)" /SD IDRETRY IDRETRY clawx_extract_attempt IDCANCEL clawx_extract_abort',
@@ -67,11 +76,11 @@ export function patchNsisExtractTemplate(targetPath = EXTRACT_APP_PACKAGE_NSH) {
   }
 
   const original = readFileSync(targetPath, 'utf8');
-  if (original.includes('ClawX-patched')) {
+  if (original.includes(PATCHED_MACRO)) {
     return true;
   }
 
-  if (!original.includes('CopyFiles')) {
+  if (!original.includes('CopyFiles') && !original.includes('ClawX-patched')) {
     console.warn('[patch-nsis-extract] CopyFiles not found — NSIS template may have changed.');
     return false;
   }

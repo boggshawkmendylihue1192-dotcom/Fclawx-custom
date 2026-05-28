@@ -28,7 +28,7 @@
       # process tree (5s timeout + force-terminate + re-quit).  Wait for the
       # app to exit on its own before resorting to force-kill.
       DetailPrint `Waiting for "${PRODUCT_NAME}" to finish shutting down...`
-      Sleep 8000
+      Sleep 12000
       ${nsProcess::FindProcess} "${APP_EXECUTABLE_FILENAME}" $R0
       ${if} $R0 != 0
         # App exited cleanly. Still kill long-lived child processes (gateway,
@@ -70,8 +70,9 @@
     Pop $1
 
     # Wait for Windows to fully release file handles after process termination.
-    # 5 seconds accommodates slow antivirus scanners and filesystem flush delays.
-    Sleep 5000
+    # Slow disks, Defender scans, and Electron child process teardown can take
+    # longer during auto-update than during a normal manual install.
+    Sleep 8000
     DetailPrint "Processes terminated. Continuing installation..."
 
     done_killing:

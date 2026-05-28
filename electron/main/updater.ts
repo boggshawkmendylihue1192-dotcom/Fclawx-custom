@@ -211,6 +211,11 @@ export class AppUpdater extends EventEmitter {
     logger.info('[Updater] quitAndInstall called');
     this.updateStatus({ status: 'installing', info: this.status.info });
     setQuitting();
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (window.isDestroyed()) return;
+      window.removeAllListeners('close');
+      window.close();
+    });
     autoUpdater.quitAndInstall();
   }
 
