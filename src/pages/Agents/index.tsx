@@ -381,6 +381,10 @@ const inputClasses = 'h-[44px] rounded-xl font-mono text-meta bg-transparent bor
 const selectClasses = 'h-[44px] w-full rounded-xl font-mono text-meta bg-transparent border border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:border-blue-500 shadow-sm transition-all text-foreground px-3';
 const labelClasses = 'text-sm text-foreground/80 font-bold';
 
+function getDisplayAgentName(name: string): string {
+  return name === 'Main' ? '主智能体' : name;
+}
+
 function ChannelLogo({ type }: { type: ChannelType }) {
   switch (type) {
     case 'telegram':
@@ -412,19 +416,19 @@ function ToolPermissionEditor({
   onChange: (next: AgentToolPermissions) => void;
 }) {
   const items: Array<{ key: keyof AgentToolPermissions; label: string; detail: string }> = [
-    { key: 'files', label: 'Files', detail: 'Read and write workspace files' },
-    { key: 'shell', label: 'Shell', detail: 'Run terminal commands when needed' },
-    { key: 'browser', label: 'Browser', detail: 'Open web pages for research and verification' },
-    { key: 'skills', label: 'Skills', detail: 'Use installed OpenClaw/Codex skills' },
-    { key: 'memory', label: 'Memory', detail: 'Use persistent context where available' },
-    { key: 'delegation', label: 'Delegation', detail: 'Spawn and steer sub-agents with sessions_spawn' },
+    { key: 'files', label: '文件', detail: '读取和写入工作区文件' },
+    { key: 'shell', label: '终端', detail: '按需运行终端命令' },
+    { key: 'browser', label: '浏览器', detail: '打开网页进行研究和验证' },
+    { key: 'skills', label: '技能', detail: '使用已安装的 OpenClaw/Codex 技能' },
+    { key: 'memory', label: '记忆', detail: '在可用时使用持久上下文' },
+    { key: 'delegation', label: '委托', detail: '通过 sessions_spawn 启动和调度子智能体' },
   ];
 
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
         <Wrench className="h-4 w-4 text-foreground/70" />
-        <Label className={labelClasses}>Tool permissions</Label>
+        <Label className={labelClasses}>工具权限</Label>
       </div>
       <div className="grid gap-3 md:grid-cols-2">
         {items.map((item) => (
@@ -655,7 +659,7 @@ function AddAgentDialog({
             />
           </div>
           <div className="space-y-2.5">
-            <Label htmlFor="agent-template" className={labelClasses}>Template</Label>
+            <Label htmlFor="agent-template" className={labelClasses}>模板</Label>
             <select
               id="agent-template"
               value={templateId}
@@ -671,17 +675,17 @@ function AddAgentDialog({
             </p>
           </div>
           <div className="space-y-2.5">
-            <Label htmlFor="agent-description" className={labelClasses}>Description</Label>
+            <Label htmlFor="agent-description" className={labelClasses}>描述</Label>
             <Input
               id="agent-description"
               value={description}
               onChange={(event) => setDescription(event.target.value)}
-              placeholder="What this agent is for"
+              placeholder="这个智能体的用途"
               className={inputClasses}
             />
           </div>
           <div className="space-y-2.5">
-            <Label htmlFor="agent-instructions" className={labelClasses}>Instructions</Label>
+            <Label htmlFor="agent-instructions" className={labelClasses}>指令</Label>
             <textarea
               id="agent-instructions"
               value={instructions}
@@ -827,7 +831,7 @@ function AgentSettingsModal({
         <CardHeader className="flex flex-row items-start justify-between pb-2 shrink-0">
           <div>
             <CardTitle className="text-2xl font-serif font-normal tracking-tight">
-              {t('settingsDialog.title', { name: agent.name })}
+              {t('settingsDialog.title', { name: getDisplayAgentName(agent.name) })}
             </CardTitle>
             <CardDescription className="text-sm mt-1 text-foreground/70">
               {t('settingsDialog.description')}
@@ -872,7 +876,7 @@ function AgentSettingsModal({
 
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2.5">
-                <Label htmlFor="agent-settings-template" className={labelClasses}>Template</Label>
+                <Label htmlFor="agent-settings-template" className={labelClasses}>模板</Label>
                 <select
                   id="agent-settings-template"
                   value={templateId}
@@ -891,7 +895,7 @@ function AgentSettingsModal({
                 </select>
               </div>
               <div className="space-y-2.5">
-                <Label htmlFor="agent-settings-description" className={labelClasses}>Description</Label>
+                <Label htmlFor="agent-settings-description" className={labelClasses}>描述</Label>
                 <Input
                   id="agent-settings-description"
                   value={description}
@@ -904,7 +908,7 @@ function AgentSettingsModal({
             <div className="space-y-2.5">
               <div className="flex items-center gap-2">
                 <FileText className="h-4 w-4 text-foreground/70" />
-                <Label htmlFor="agent-settings-instructions" className={labelClasses}>Instructions</Label>
+                <Label htmlFor="agent-settings-instructions" className={labelClasses}>指令</Label>
               </div>
               <textarea
                 id="agent-settings-instructions"
