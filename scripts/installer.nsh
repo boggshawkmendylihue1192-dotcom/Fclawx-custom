@@ -28,16 +28,28 @@
       # process tree (5s timeout + force-terminate + re-quit).  Wait for the
       # app to exit on its own before resorting to force-kill.
       DetailPrint `Waiting for "${PRODUCT_NAME}" to finish shutting down...`
-      Sleep 12000
-      ${nsProcess::FindProcess} "${APP_EXECUTABLE_FILENAME}" $R0
-      ${if} $R0 != 0
+      StrCpy $R7 0
+      _wait_app_exit:
+        Sleep 1000
+        ${nsProcess::FindProcess} "${APP_EXECUTABLE_FILENAME}" $R0
+        ${if} $R0 != 0
+          Goto _app_exited_cleanly
+        ${endIf}
+        IntOp $R7 $R7 + 1
+        ${if} $R7 < 6
+          Goto _wait_app_exit
+        ${endIf}
+      Goto _force_close_app
+
+      _app_exited_cleanly:
         # App exited cleanly. Still kill long-lived child processes (gateway,
         # uv, python) which may not have followed the app's graceful exit.
         nsExec::ExecToStack 'taskkill /F /IM openclaw-gateway.exe'
         Pop $0
         Pop $1
         Goto done_killing
-      ${endIf}
+
+      _force_close_app:
       # App didn't exit in time; fall through to force-kill
     ${endIf}
 
@@ -72,7 +84,7 @@
     # Wait for Windows to fully release file handles after process termination.
     # Slow disks, Defender scans, and Electron child process teardown can take
     # longer during auto-update than during a normal manual install.
-    Sleep 8000
+    Sleep 2000
     DetailPrint "Processes terminated. Continuing installation..."
 
     done_killing:
@@ -102,7 +114,7 @@
   ; The PowerShell path-based kill above already handles uv inside $INSTDIR.
 
   ; Brief wait for handle release (main wait was already done above if app was running)
-  Sleep 2000
+  Sleep 500
 
   ; Release NSIS's CWD on $INSTDIR BEFORE the rename check.
   ; NSIS sets CWD to $INSTDIR in .onInit; Windows refuses to rename a directory
@@ -148,11 +160,11 @@
       nsExec::ExecToStack 'taskkill /F /IM openclaw-gateway.exe'
       Pop $0
       Pop $1
-      Sleep 3000
+      Sleep 1000
       nsExec::ExecToStack 'cmd.exe /c rd /s /q "$INSTDIR"'
       Pop $0
       Pop $1
-      Sleep 2000
+      Sleep 1000
       CreateDirectory "$INSTDIR"
       Goto _instdir_clean
   _stale_moved:
@@ -252,9 +264,7 @@
   ; causing 10-30s startup delay on a fresh install).  Requires elevation;
   ; silently fails on non-admin per-user installs (no harm done).
   DetailPrint "Configuring Windows Defender exclusion..."
-  nsExec::ExecToStack `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Add-MpPreference -ExclusionPath '$INSTDIR' -ErrorAction SilentlyContinue"`
-  Pop $0
-  Pop $1
+  ExecShell "" "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" `-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Add-MpPreference -ExclusionPath '$INSTDIR' -ErrorAction SilentlyContinue"` SW_HIDE
 
   ; Use PowerShell to update the current user's PATH.
   ; This avoids NSIS string-buffer limits and preserves long PATH values.
