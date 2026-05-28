@@ -673,7 +673,12 @@ exports.default = async function afterPack(context) {
   cpSync(src, dest, { recursive: true });
   console.log('[after-pack] ✅ openclaw node_modules copied.');
 
-  const missingRuntimePackages = ELECTRON_MAIN_RUNTIME_PACKAGES.filter((pkgName) => {
+  const requiredBundledRuntimePackages = [
+    ...ELECTRON_MAIN_RUNTIME_PACKAGES,
+    'fast-string-width',
+    'fast-string-truncated-width',
+  ];
+  const missingRuntimePackages = requiredBundledRuntimePackages.filter((pkgName) => {
     const pkgJson = join(dest, ...pkgName.split('/'), 'package.json');
     return !existsSync(pkgJson);
   });

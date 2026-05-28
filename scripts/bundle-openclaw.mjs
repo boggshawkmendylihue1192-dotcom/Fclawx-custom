@@ -1073,7 +1073,13 @@ if (!entryExists || !distExists) {
   process.exit(1);
 }
 
-const missingRuntimePackages = ELECTRON_MAIN_RUNTIME_PACKAGES.filter((pkgName) => {
+const REQUIRED_BUNDLED_RUNTIME_PACKAGES = [
+  ...ELECTRON_MAIN_RUNTIME_PACKAGES,
+  'fast-string-width',
+  'fast-string-truncated-width',
+];
+
+const missingRuntimePackages = REQUIRED_BUNDLED_RUNTIME_PACKAGES.filter((pkgName) => {
   const pkgJson = path.join(outputNodeModules, ...pkgName.split('/'), 'package.json');
   return !fs.existsSync(pkgJson);
 });

@@ -31,6 +31,12 @@ export const EXTRA_BUNDLED_PACKAGES = [
   // Electron main process QR login flows resolve these files from the
   // bundled OpenClaw runtime context in packaged builds.
   'qrcode-terminal',
+
+  // fast-string-width imports this package through an ESM bare specifier.
+  // Some pnpm layouts place it in a sibling virtual store entry that the
+  // OpenClaw bundle traversal can miss, which makes the packaged Gateway fail
+  // at startup with "Cannot find package ... fast-string-truncated-width".
+  'fast-string-truncated-width',
 ];
 
 /** Subset required by the Electron main process (verified after bundle + afterPack). */

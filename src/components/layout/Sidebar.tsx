@@ -26,6 +26,7 @@ import {
   ImagePlus,
   Moon,
   ChevronRight,
+  Layers,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { rendererExtensionRegistry } from '@/extensions/registry';
@@ -311,6 +312,7 @@ export function Sidebar() {
     { to: '/skills', icon: <Puzzle className="h-4 w-4" strokeWidth={2} />, label: t('sidebar.skills'), testId: 'sidebar-nav-skills' },
     { to: '/cron', icon: <Clock className="h-4 w-4" strokeWidth={2} />, label: t('sidebar.cronTasks'), testId: 'sidebar-nav-cron' },
     { to: '/workflows', icon: <Workflow className="h-4 w-4" strokeWidth={2} />, label: t('common:sidebar.workflows'), testId: 'sidebar-nav-workflows' },
+    { to: '/workbench', icon: <Layers className="h-4 w-4" strokeWidth={2} />, label: '工作台', testId: 'sidebar-nav-workbench' },
     ...(devModeUnlocked
       ? [
         { to: '/image-generation', icon: <ImagePlus className="h-4 w-4" strokeWidth={2} />, label: t('common:sidebar.imageGeneration'), testId: 'sidebar-nav-image-generation' },
