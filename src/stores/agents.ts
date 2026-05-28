@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { hostApiFetch } from '@/lib/host-api';
 import type { ChannelType } from '@/types/channel';
-import type { AgentSummary, AgentsSnapshot, AgentToolPermissions } from '@/types/agent';
+import type { AgentDelegationConfig, AgentSummary, AgentsSnapshot, AgentToolPermissions } from '@/types/agent';
 
 export interface AgentProfileInput {
   name?: string;
@@ -9,6 +9,7 @@ export interface AgentProfileInput {
   instructions?: string;
   templateId?: string;
   toolPermissions?: Partial<AgentToolPermissions>;
+  delegationConfig?: Partial<AgentDelegationConfig>;
 }
 
 interface AgentsState {

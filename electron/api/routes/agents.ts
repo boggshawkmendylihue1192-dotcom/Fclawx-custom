@@ -10,6 +10,7 @@ import {
   updateAgentModel,
   updateAgentName,
   updateAgentProfile,
+  type AgentDelegationConfig,
   type AgentToolPermissions,
 } from '../../utils/agent-config';
 import { deleteChannelAccountConfig } from '../../utils/channel-config';
@@ -128,6 +129,7 @@ export async function handleAgentRoutes(
         description?: string;
         instructions?: string;
         toolPermissions?: Partial<AgentToolPermissions>;
+        delegationConfig?: Partial<AgentDelegationConfig>;
       }>(req);
       const snapshot = await createAgent(body.name, {
         inheritWorkspace: body.inheritWorkspace,
@@ -135,6 +137,7 @@ export async function handleAgentRoutes(
         description: body.description,
         instructions: body.instructions,
         toolPermissions: body.toolPermissions,
+        delegationConfig: body.delegationConfig,
       });
       // Sync provider API keys to the new agent's auth-profiles.json so the
       // embedded runner can authenticate with LLM providers when messages
@@ -168,9 +171,10 @@ export async function handleAgentRoutes(
           instructions?: string;
           templateId?: string;
           toolPermissions?: Partial<AgentToolPermissions>;
+          delegationConfig?: Partial<AgentDelegationConfig>;
         }>(req);
         const agentId = decodeURIComponent(parts[0]);
-        const profileKeys = ['description', 'instructions', 'templateId', 'toolPermissions'] as const;
+        const profileKeys = ['description', 'instructions', 'templateId', 'toolPermissions', 'delegationConfig'] as const;
         const hasProfileUpdate = profileKeys.some((key) => body[key] !== undefined);
         const snapshot = hasProfileUpdate
           ? await updateAgentProfile(agentId, body)

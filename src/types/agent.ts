@@ -5,6 +5,7 @@ export interface AgentSummary {
   instructions?: string;
   templateId?: string;
   toolPermissions?: AgentToolPermissions;
+  delegationConfig?: AgentDelegationConfig;
   isDefault: boolean;
   modelDisplay: string;
   modelRef?: string | null;
@@ -31,7 +32,9 @@ export interface AgentDelegationConfig {
   delegationMode: 'suggest' | 'prefer';
   maxConcurrent: number;
   maxSpawnDepth: number;
+  maxChildrenPerAgent: number;
   runTimeoutSeconds: number;
+  requireAgentId: boolean;
 }
 
 export interface AgentsSnapshot {

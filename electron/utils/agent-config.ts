@@ -42,7 +42,9 @@ interface AgentSubagentsConfig extends Record<string, unknown> {
   delegationMode?: 'suggest' | 'prefer';
   maxConcurrent?: number;
   maxSpawnDepth?: number;
+  maxChildrenPerAgent?: number;
   runTimeoutSeconds?: number;
+  requireAgentId?: boolean;
 }
 
 interface AgentDefaultsConfig {
@@ -104,6 +106,7 @@ export interface AgentSummary {
   instructions?: string;
   templateId?: string;
   toolPermissions: AgentToolPermissions;
+  delegationConfig: AgentDelegationConfig;
   isDefault: boolean;
   modelDisplay: string;
   modelRef: string | null;
@@ -124,12 +127,24 @@ export interface AgentToolPermissions {
   delegation: boolean;
 }
 
+export interface AgentDelegationConfig {
+  enabled: boolean;
+  allowAgents: string[];
+  delegationMode: 'suggest' | 'prefer';
+  maxConcurrent: number;
+  maxSpawnDepth: number;
+  maxChildrenPerAgent: number;
+  runTimeoutSeconds: number;
+  requireAgentId: boolean;
+}
+
 export interface AgentProfileUpdate {
   name?: string;
   description?: string;
   instructions?: string;
   templateId?: string;
   toolPermissions?: Partial<AgentToolPermissions>;
+  delegationConfig?: Partial<AgentDelegationConfig>;
 }
 
 export interface AgentsSnapshot {
@@ -151,6 +166,16 @@ const DEFAULT_TOOL_PERMISSIONS: AgentToolPermissions = {
 };
 
 const DELEGATION_TOOL_NAMES = ['sessions_spawn', 'sessions_yield', 'subagents', 'agents_list'];
+const DEFAULT_DELEGATION_CONFIG: AgentDelegationConfig = {
+  enabled: true,
+  allowAgents: ['*'],
+  delegationMode: 'prefer',
+  maxConcurrent: 4,
+  maxSpawnDepth: 2,
+  maxChildrenPerAgent: 5,
+  runTimeoutSeconds: 900,
+  requireAgentId: true,
+};
 
 const AGENT_TEMPLATES: Record<string, {
   description: string;
@@ -235,6 +260,45 @@ function normalizeToolPermissions(value: unknown): AgentToolPermissions {
   };
 }
 
+function normalizeDelegationMode(value: unknown): 'suggest' | 'prefer' {
+  return value === 'suggest' || value === 'prefer' ? value : DEFAULT_DELEGATION_CONFIG.delegationMode;
+}
+
+function normalizePositiveInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const numberValue = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numberValue)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(numberValue)));
+}
+
+function normalizeDelegationConfig(value: unknown, permissions?: AgentToolPermissions): AgentDelegationConfig {
+  const source = value && typeof value === 'object' ? value as Partial<AgentDelegationConfig> & AgentSubagentsConfig : {};
+  const allowAgents = Array.isArray(source.allowAgents) && source.allowAgents.length > 0
+    ? uniqueStrings(source.allowAgents)
+    : [...DEFAULT_DELEGATION_CONFIG.allowAgents];
+  return {
+    enabled: permissions ? permissions.delegation : source.enabled !== false,
+    allowAgents: allowAgents.length > 0 ? allowAgents : [...DEFAULT_DELEGATION_CONFIG.allowAgents],
+    delegationMode: normalizeDelegationMode(source.delegationMode),
+    maxConcurrent: normalizePositiveInteger(source.maxConcurrent, DEFAULT_DELEGATION_CONFIG.maxConcurrent, 1, 16),
+    maxSpawnDepth: normalizePositiveInteger(source.maxSpawnDepth, DEFAULT_DELEGATION_CONFIG.maxSpawnDepth, 1, 5),
+    maxChildrenPerAgent: normalizePositiveInteger(source.maxChildrenPerAgent, DEFAULT_DELEGATION_CONFIG.maxChildrenPerAgent, 1, 20),
+    runTimeoutSeconds: normalizePositiveInteger(source.runTimeoutSeconds, DEFAULT_DELEGATION_CONFIG.runTimeoutSeconds, 0, 86_400),
+    requireAgentId: typeof source.requireAgentId === 'boolean' ? source.requireAgentId : DEFAULT_DELEGATION_CONFIG.requireAgentId,
+  };
+}
+
+function toSubagentsConfig(value: AgentDelegationConfig): AgentSubagentsConfig {
+  return {
+    allowAgents: value.allowAgents,
+    delegationMode: value.delegationMode,
+    maxConcurrent: value.maxConcurrent,
+    maxSpawnDepth: value.maxSpawnDepth,
+    maxChildrenPerAgent: value.maxChildrenPerAgent,
+    runTimeoutSeconds: value.runTimeoutSeconds,
+    requireAgentId: value.requireAgentId,
+  };
+}
+
 function uniqueStrings(values: unknown[]): string[] {
   return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0).map((value) => value.trim()))];
 }
@@ -251,12 +315,15 @@ function ensureDelegationConfig(config: AgentConfigDocument, entries: AgentListE
       ...defaults,
       subagents: {
         ...existingSubagents,
-        allowAgents: ['*'],
-        delegationMode: existingSubagents.delegationMode || 'prefer',
-        maxConcurrent: typeof existingSubagents.maxConcurrent === 'number' ? existingSubagents.maxConcurrent : 4,
-        maxSpawnDepth: typeof existingSubagents.maxSpawnDepth === 'number' ? Math.max(existingSubagents.maxSpawnDepth, 2) : 2,
-        maxChildrenPerAgent: typeof existingSubagents.maxChildrenPerAgent === 'number' ? existingSubagents.maxChildrenPerAgent : 5,
-        runTimeoutSeconds: typeof existingSubagents.runTimeoutSeconds === 'number' ? existingSubagents.runTimeoutSeconds : 900,
+        allowAgents: Array.isArray(existingSubagents.allowAgents) && existingSubagents.allowAgents.length > 0
+          ? existingSubagents.allowAgents
+          : DEFAULT_DELEGATION_CONFIG.allowAgents,
+        delegationMode: existingSubagents.delegationMode || DEFAULT_DELEGATION_CONFIG.delegationMode,
+        maxConcurrent: typeof existingSubagents.maxConcurrent === 'number' ? existingSubagents.maxConcurrent : DEFAULT_DELEGATION_CONFIG.maxConcurrent,
+        maxSpawnDepth: typeof existingSubagents.maxSpawnDepth === 'number' ? Math.max(existingSubagents.maxSpawnDepth, 2) : DEFAULT_DELEGATION_CONFIG.maxSpawnDepth,
+        maxChildrenPerAgent: typeof existingSubagents.maxChildrenPerAgent === 'number' ? existingSubagents.maxChildrenPerAgent : DEFAULT_DELEGATION_CONFIG.maxChildrenPerAgent,
+        runTimeoutSeconds: typeof existingSubagents.runTimeoutSeconds === 'number' ? existingSubagents.runTimeoutSeconds : DEFAULT_DELEGATION_CONFIG.runTimeoutSeconds,
+        requireAgentId: typeof existingSubagents.requireAgentId === 'boolean' ? existingSubagents.requireAgentId : DEFAULT_DELEGATION_CONFIG.requireAgentId,
       },
     },
   };
@@ -264,6 +331,7 @@ function ensureDelegationConfig(config: AgentConfigDocument, entries: AgentListE
   for (const entry of entries) {
     const permissions = normalizeToolPermissions(entry.toolPermissions);
     const existingTools = entry.tools && typeof entry.tools === 'object' ? entry.tools : {};
+    const delegationConfig = normalizeDelegationConfig(entry.subagents, permissions);
     const existingSubagents = entry.subagents && typeof entry.subagents === 'object' ? entry.subagents : {};
     entry.tools = permissions.delegation
       ? {
@@ -271,14 +339,16 @@ function ensureDelegationConfig(config: AgentConfigDocument, entries: AgentListE
         profile: existingTools.profile || 'coding',
         alsoAllow: uniqueStrings([...(existingTools.alsoAllow || []), ...DELEGATION_TOOL_NAMES]),
       }
-      : existingTools;
+      : {
+        ...existingTools,
+        alsoAllow: Array.isArray(existingTools.alsoAllow)
+          ? existingTools.alsoAllow.filter((tool) => !DELEGATION_TOOL_NAMES.includes(tool))
+          : existingTools.alsoAllow,
+      };
     entry.subagents = permissions.delegation
       ? {
         ...existingSubagents,
-        allowAgents: Array.isArray(existingSubagents.allowAgents) && existingSubagents.allowAgents.length > 0
-          ? existingSubagents.allowAgents
-          : ['*'],
-        delegationMode: existingSubagents.delegationMode || 'prefer',
+        ...toSubagentsConfig(delegationConfig),
       }
       : existingSubagents;
   }
@@ -337,7 +407,8 @@ function buildToolPermissionsBlock(permissions: AgentToolPermissions): string {
     ...rows,
     '',
     'Follow these permissions when deciding whether to use tools for this agent.',
-    'When Delegation is enabled and a task benefits from another configured agent, use sessions_spawn with an explicit agentId and call sessions_yield when you need child results before the final answer.',
+    'When Delegation is enabled and a task benefits from another configured agent, inspect agents_list, use sessions_spawn with an explicit agentId, and call sessions_yield when you need child results before the final answer.',
+    'Do not poll subagents, sessions_list, or sessions_history in a loop just to wait for completion; wait for completion events or yield once when needed.',
     '<!-- CLAWX_AGENT_TOOL_PERMISSIONS_END -->',
   ].join('\n');
 }
@@ -747,6 +818,7 @@ async function buildSnapshotFromConfig(config: AgentConfigDocument, preloadedCha
       instructions: await readAgentInstructions(config, entry),
       templateId: normalizeTemplateId(entry.templateId),
       toolPermissions: normalizeToolPermissions(entry.toolPermissions),
+      delegationConfig: normalizeDelegationConfig(entry.subagents, normalizeToolPermissions(entry.toolPermissions)),
       isDefault: entry.id === defaultAgentId,
       modelDisplay: modelLabel,
       modelRef: explicitModelRef || defaultModelRef || null,
@@ -820,6 +892,7 @@ export async function createAgent(
     description?: string;
     instructions?: string;
     toolPermissions?: Partial<AgentToolPermissions>;
+    delegationConfig?: Partial<AgentDelegationConfig>;
   },
 ): Promise<AgentsSnapshot> {
   return withConfigLock(async () => {
@@ -846,6 +919,7 @@ export async function createAgent(
       workspace: `~/.openclaw/workspace-${nextId}`,
       agentDir: getDefaultAgentDirPath(nextId),
     };
+    newAgent.subagents = toSubagentsConfig(normalizeDelegationConfig(options?.delegationConfig, newAgent.toolPermissions));
 
     if (!nextEntries.some((entry) => entry.id === MAIN_AGENT_ID) && syntheticMain) {
       nextEntries.unshift(createImplicitMainEntry(config));
@@ -922,6 +996,10 @@ export async function updateAgentProfile(agentId: string, update: AgentProfileUp
         ...(update.toolPermissions || {}),
       }),
     };
+    nextEntry.subagents = toSubagentsConfig(normalizeDelegationConfig({
+      ...(currentEntry.subagents || {}),
+      ...(update.delegationConfig || {}),
+    }, nextEntry.toolPermissions));
 
     if (typeof update.name === 'string' && !nextEntry.default) {
       nextEntry.name = normalizeAgentName(update.name);

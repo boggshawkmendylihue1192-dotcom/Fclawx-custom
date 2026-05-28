@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Bot, Check, FileText, Plus, RefreshCw, Settings2, Trash2, Wrench, X } from 'lucide-react';
+import { AlertCircle, Bot, Check, FileText, Plus, RefreshCw, Settings2, Trash2, Users, Wrench, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -14,8 +14,7 @@ import { useProviderStore } from '@/stores/providers';
 import { hostApiFetch } from '@/lib/host-api';
 import { subscribeHostEvent } from '@/lib/host-events';
 import { CHANNEL_ICONS, CHANNEL_NAMES, type ChannelType } from '@/types/channel';
-import type { AgentSummary } from '@/types/agent';
-import type { AgentToolPermissions } from '@/types/agent';
+import type { AgentDelegationConfig, AgentSummary, AgentToolPermissions } from '@/types/agent';
 import {
   buildRuntimeProviderOptions,
   splitModelRef,
@@ -74,6 +73,26 @@ const DEFAULT_TOOL_PERMISSIONS: AgentToolPermissions = {
   memory: true,
   delegation: true,
 };
+
+const DEFAULT_DELEGATION_CONFIG: AgentDelegationConfig = {
+  enabled: true,
+  allowAgents: ['*'],
+  delegationMode: 'prefer',
+  maxConcurrent: 4,
+  maxSpawnDepth: 2,
+  maxChildrenPerAgent: 5,
+  runTimeoutSeconds: 900,
+  requireAgentId: true,
+};
+
+function normalizeDelegationConfig(value?: Partial<AgentDelegationConfig>, permissions = DEFAULT_TOOL_PERMISSIONS): AgentDelegationConfig {
+  return {
+    ...DEFAULT_DELEGATION_CONFIG,
+    ...(value || {}),
+    enabled: permissions.delegation,
+    allowAgents: value?.allowAgents?.length ? value.allowAgents : DEFAULT_DELEGATION_CONFIG.allowAgents,
+  };
+}
 
 export function Agents() {
   const { t } = useTranslation('agents');
@@ -428,6 +447,133 @@ function ToolPermissionEditor({
   );
 }
 
+function DelegationEditor({
+  value,
+  agents,
+  currentAgentId,
+  disabled,
+  onChange,
+}: {
+  value: AgentDelegationConfig;
+  agents: AgentSummary[];
+  currentAgentId?: string;
+  disabled?: boolean;
+  onChange: (next: AgentDelegationConfig) => void;
+}) {
+  const explicitTargets = value.allowAgents.includes('*') ? [] : value.allowAgents;
+  const selectableAgents = agents.filter((agent) => agent.id !== currentAgentId);
+
+  const updateNumber = (key: 'maxConcurrent' | 'maxSpawnDepth' | 'maxChildrenPerAgent' | 'runTimeoutSeconds', raw: string) => {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return;
+    onChange({ ...value, [key]: Math.max(0, Math.floor(parsed)) });
+  };
+
+  const toggleAgent = (agentId: string, checked: boolean) => {
+    const next = new Set(explicitTargets);
+    if (checked) {
+      next.add(agentId);
+    } else {
+      next.delete(agentId);
+    }
+    onChange({ ...value, allowAgents: Array.from(next) });
+  };
+
+  return (
+    <div className={cn('space-y-4 rounded-2xl border border-black/10 dark:border-white/10 p-4', disabled && 'opacity-60')}>
+      <div className="flex items-start gap-3">
+        <Users className="h-4 w-4 mt-0.5 text-foreground/70" />
+        <div className="min-w-0">
+          <Label className={labelClasses}>智能体协作</Label>
+          <p className="text-xs text-muted-foreground mt-1">
+            配置 OpenClaw 的 sessions_spawn 委托策略，底层 agentId 和工具名保持英文。
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <label className="space-y-1.5">
+          <span className="text-xs font-semibold text-foreground/70">委托模式</span>
+          <select
+            value={value.delegationMode}
+            disabled={disabled}
+            onChange={(event) => onChange({ ...value, delegationMode: event.target.value as AgentDelegationConfig['delegationMode'] })}
+            className={selectClasses}
+          >
+            <option value="prefer">优先委托</option>
+            <option value="suggest">建议委托</option>
+          </select>
+        </label>
+        <label className="flex items-center justify-between gap-3 rounded-xl bg-black/5 dark:bg-white/5 p-3">
+          <span>
+            <span className="block text-sm font-semibold text-foreground">必须指定 agentId</span>
+            <span className="block text-xs text-muted-foreground">避免 sessions_spawn 误用默认目标</span>
+          </span>
+          <Switch
+            checked={value.requireAgentId}
+            disabled={disabled}
+            onCheckedChange={(checked) => onChange({ ...value, requireAgentId: checked })}
+          />
+        </label>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-4">
+        <label className="space-y-1.5">
+          <span className="text-xs font-semibold text-foreground/70">并发</span>
+          <Input disabled={disabled} type="number" min={1} max={16} value={value.maxConcurrent} onChange={(event) => updateNumber('maxConcurrent', event.target.value)} className={inputClasses} />
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-semibold text-foreground/70">深度</span>
+          <Input disabled={disabled} type="number" min={1} max={5} value={value.maxSpawnDepth} onChange={(event) => updateNumber('maxSpawnDepth', event.target.value)} className={inputClasses} />
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-semibold text-foreground/70">子任务数</span>
+          <Input disabled={disabled} type="number" min={1} max={20} value={value.maxChildrenPerAgent} onChange={(event) => updateNumber('maxChildrenPerAgent', event.target.value)} className={inputClasses} />
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-semibold text-foreground/70">超时秒</span>
+          <Input disabled={disabled} type="number" min={0} max={86400} value={value.runTimeoutSeconds} onChange={(event) => updateNumber('runTimeoutSeconds', event.target.value)} className={inputClasses} />
+        </label>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs font-semibold text-foreground/70">允许委托给</span>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Switch
+              checked={value.allowAgents.includes('*')}
+              disabled={disabled}
+              onCheckedChange={(checked) => onChange({ ...value, allowAgents: checked ? ['*'] : [] })}
+            />
+            任意已配置智能体
+          </label>
+        </div>
+        {!value.allowAgents.includes('*') && (
+          <div className="grid gap-2 md:grid-cols-2">
+            {selectableAgents.length === 0 ? (
+              <div className="text-xs text-muted-foreground rounded-xl border border-dashed border-black/10 dark:border-white/10 p-3">
+                还没有其它智能体可选。
+              </div>
+            ) : selectableAgents.map((agent) => (
+              <label key={agent.id} className="flex items-center justify-between gap-3 rounded-xl bg-black/5 dark:bg-white/5 p-3">
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold text-foreground truncate">{agent.name}</span>
+                  <span className="block text-xs font-mono text-muted-foreground truncate">{agent.id}</span>
+                </span>
+                <Switch
+                  disabled={disabled}
+                  checked={explicitTargets.includes(agent.id)}
+                  onCheckedChange={(checked) => toggleAgent(agent.id, checked)}
+                />
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AddAgentDialog({
   onClose,
   onCreate,
@@ -439,6 +585,7 @@ function AddAgentDialog({
     description: string;
     instructions: string;
     toolPermissions: AgentToolPermissions;
+    delegationConfig: AgentDelegationConfig;
   }) => Promise<void>;
 }) {
   const { t } = useTranslation('agents');
@@ -447,6 +594,7 @@ function AddAgentDialog({
   const [description, setDescription] = useState('');
   const [instructions, setInstructions] = useState(TEMPLATE_INSTRUCTIONS.general);
   const [toolPermissions, setToolPermissions] = useState<AgentToolPermissions>(DEFAULT_TOOL_PERMISSIONS);
+  const [delegationConfig, setDelegationConfig] = useState<AgentDelegationConfig>(DEFAULT_DELEGATION_CONFIG);
   const [inheritWorkspace, setInheritWorkspace] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -455,11 +603,13 @@ function AddAgentDialog({
     setInstructions(TEMPLATE_INSTRUCTIONS[nextTemplateId] || TEMPLATE_INSTRUCTIONS.general);
     const template = AGENT_TEMPLATE_OPTIONS.find((option) => option.id === nextTemplateId);
     setDescription(template?.description || '');
-    setToolPermissions({
+    const nextPermissions = {
       ...DEFAULT_TOOL_PERMISSIONS,
       shell: nextTemplateId === 'research' || nextTemplateId === 'writing' ? false : DEFAULT_TOOL_PERMISSIONS.shell,
       browser: nextTemplateId === 'writing' ? false : DEFAULT_TOOL_PERMISSIONS.browser,
-    });
+    };
+    setToolPermissions(nextPermissions);
+    setDelegationConfig(normalizeDelegationConfig({ delegationMode: nextTemplateId === 'general' || nextTemplateId === 'writing' ? 'suggest' : 'prefer' }, nextPermissions));
   };
 
   const handleSubmit = async () => {
@@ -472,6 +622,7 @@ function AddAgentDialog({
         description: description.trim(),
         instructions: instructions.trim(),
         toolPermissions,
+        delegationConfig: normalizeDelegationConfig(delegationConfig, toolPermissions),
       });
     } catch (error) {
       toast.error(t('toast.agentCreateFailed', { error: String(error) }));
@@ -538,7 +689,19 @@ function AddAgentDialog({
               className="min-h-[120px] w-full rounded-xl text-sm bg-transparent border border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:border-blue-500 shadow-sm transition-all text-foreground placeholder:text-foreground/40 p-3 resize-y"
             />
           </div>
-          <ToolPermissionEditor value={toolPermissions} onChange={setToolPermissions} />
+          <ToolPermissionEditor
+            value={toolPermissions}
+            onChange={(next) => {
+              setToolPermissions(next);
+              setDelegationConfig((current) => normalizeDelegationConfig(current, next));
+            }}
+          />
+          <DelegationEditor
+            value={delegationConfig}
+            agents={[]}
+            disabled={!toolPermissions.delegation}
+            onChange={setDelegationConfig}
+          />
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
               <Label htmlFor="inherit-workspace" className={labelClasses}>{t('createDialog.inheritWorkspaceLabel')}</Label>
@@ -589,12 +752,13 @@ function AgentSettingsModal({
   onClose: () => void;
 }) {
   const { t } = useTranslation('agents');
-  const { updateAgentProfile, defaultModelRef } = useAgentsStore();
+  const { updateAgentProfile, defaultModelRef, agents } = useAgentsStore();
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description || '');
   const [instructions, setInstructions] = useState(agent.instructions || '');
   const [templateId, setTemplateId] = useState(agent.templateId || 'general');
   const [toolPermissions, setToolPermissions] = useState<AgentToolPermissions>(agent.toolPermissions || DEFAULT_TOOL_PERMISSIONS);
+  const [delegationConfig, setDelegationConfig] = useState<AgentDelegationConfig>(normalizeDelegationConfig(agent.delegationConfig, agent.toolPermissions || DEFAULT_TOOL_PERMISSIONS));
   const [savingName, setSavingName] = useState(false);
   const [showModelModal, setShowModelModal] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
@@ -605,13 +769,15 @@ function AgentSettingsModal({
     setInstructions(agent.instructions || '');
     setTemplateId(agent.templateId || 'general');
     setToolPermissions(agent.toolPermissions || DEFAULT_TOOL_PERMISSIONS);
-  }, [agent.description, agent.instructions, agent.name, agent.templateId, agent.toolPermissions]);
+    setDelegationConfig(normalizeDelegationConfig(agent.delegationConfig, agent.toolPermissions || DEFAULT_TOOL_PERMISSIONS));
+  }, [agent.delegationConfig, agent.description, agent.instructions, agent.name, agent.templateId, agent.toolPermissions]);
 
   const hasNameChanges = name.trim() !== agent.name
     || description.trim() !== (agent.description || '')
     || instructions.trim() !== (agent.instructions || '')
     || templateId !== (agent.templateId || 'general')
-    || JSON.stringify(toolPermissions) !== JSON.stringify(agent.toolPermissions || DEFAULT_TOOL_PERMISSIONS);
+    || JSON.stringify(toolPermissions) !== JSON.stringify(agent.toolPermissions || DEFAULT_TOOL_PERMISSIONS)
+    || JSON.stringify(normalizeDelegationConfig(delegationConfig, toolPermissions)) !== JSON.stringify(normalizeDelegationConfig(agent.delegationConfig, agent.toolPermissions || DEFAULT_TOOL_PERMISSIONS));
 
   const handleRequestClose = () => {
     if (savingName || hasNameChanges) {
@@ -622,7 +788,7 @@ function AgentSettingsModal({
   };
 
   const handleSaveName = async () => {
-    if (!name.trim() || name.trim() === agent.name) return;
+    if (!name.trim() || !hasNameChanges) return;
     setSavingName(true);
     try {
       await updateAgentProfile(agent.id, {
@@ -631,6 +797,7 @@ function AgentSettingsModal({
         instructions: instructions.trim(),
         templateId,
         toolPermissions,
+        delegationConfig: normalizeDelegationConfig(delegationConfig, toolPermissions),
       });
       toast.success(t('toast.agentUpdated'));
     } catch (error) {
@@ -691,6 +858,7 @@ function AgentSettingsModal({
                   variant="outline"
                   onClick={() => void handleSaveName()}
                   disabled={savingName || !name.trim() || !hasNameChanges}
+                  aria-label="保存智能体设置"
                   className="h-[44px] text-meta font-medium rounded-xl px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-none text-foreground/80 hover:text-foreground"
                 >
                   {savingName ? (
@@ -746,7 +914,20 @@ function AgentSettingsModal({
               />
             </div>
 
-            <ToolPermissionEditor value={toolPermissions} onChange={setToolPermissions} />
+            <ToolPermissionEditor
+              value={toolPermissions}
+              onChange={(next) => {
+                setToolPermissions(next);
+                setDelegationConfig((current) => normalizeDelegationConfig(current, next));
+              }}
+            />
+            <DelegationEditor
+              value={delegationConfig}
+              agents={agents}
+              currentAgentId={agent.id}
+              disabled={!toolPermissions.delegation}
+              onChange={setDelegationConfig}
+            />
 
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-1 rounded-2xl bg-black/5 dark:bg-white/5 border border-transparent p-4">
@@ -838,6 +1019,7 @@ function AgentSettingsModal({
           setInstructions(agent.instructions || '');
           setTemplateId(agent.templateId || 'general');
           setToolPermissions(agent.toolPermissions || DEFAULT_TOOL_PERMISSIONS);
+          setDelegationConfig(normalizeDelegationConfig(agent.delegationConfig, agent.toolPermissions || DEFAULT_TOOL_PERMISSIONS));
           onClose();
         }}
         onCancel={() => setShowCloseConfirm(false)}
