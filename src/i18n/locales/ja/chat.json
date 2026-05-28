@@ -160,6 +160,15 @@
         "thinkingLabel": "考え中",
         "errorLabel": "エラー",
         "imageGenerateLabel": "画像生成",
+        "phase": {
+            "search": "search",
+            "read": "read",
+            "write": "edit",
+            "terminal": "terminal",
+            "delegate": "agent",
+            "message": "message",
+            "system": "system"
+        },
         "agentRun": "{{agent}} の実行",
         "collapsedSummary": "ツール呼び出し {{toolCount}} 件 · プロセスメッセージ {{processCount}} 件",
         "collapseAction": "実行グラフを折りたたむ"

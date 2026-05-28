@@ -160,6 +160,15 @@
         "thinkingLabel": "Думаю",
         "runErrorLabel": "Ошибка модели",
         "imageGenerateLabel": "Генерация изображения",
+        "phase": {
+            "search": "search",
+            "read": "read",
+            "write": "edit",
+            "terminal": "terminal",
+            "delegate": "agent",
+            "message": "message",
+            "system": "system"
+        },
         "agentRun": "Выполнение {{agent}}",
         "collapsedSummary": "Вызовов инструментов: {{toolCount}} · Промежуточных сообщений: {{processCount}}",
         "collapseAction": "Свернуть граф выполнения"

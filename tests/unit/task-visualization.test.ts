@@ -297,6 +297,32 @@ describe('deriveTaskSteps', () => {
     )).toBe('Here is the summary.');
   });
 
+  it('classifies common tool calls into execution phases', () => {
+    const steps = deriveTaskSteps({
+      messages: [
+        {
+          role: 'assistant',
+          id: 'assistant-phases',
+          content: [
+            { type: 'tool_use', id: 'search-1', name: 'web_search', input: { query: 'OpenClaw docs' } },
+            { type: 'tool_use', id: 'read-1', name: 'read_file', input: { path: 'README.md' } },
+            { type: 'tool_use', id: 'write-1', name: 'apply_patch', input: { patch: '*** Begin Patch' } },
+            { type: 'tool_use', id: 'term-1', name: 'bash', input: { command: 'pnpm test' } },
+          ],
+        },
+      ],
+      streamingMessage: null,
+      streamingTools: [],
+    });
+
+    expect(steps.map((step) => [step.id, step.phase])).toEqual([
+      ['search-1', 'search'],
+      ['read-1', 'read'],
+      ['write-1', 'write'],
+      ['term-1', 'terminal'],
+    ]);
+  });
+
   it('builds a branch for spawned subagents', () => {
     const messages: RawMessage[] = [
       {
@@ -329,11 +355,17 @@ describe('deriveTaskSteps', () => {
       expect.objectContaining({
         id: 'spawn-1',
         label: 'sessions_spawn',
+        phase: 'delegate',
+        targetAgentId: 'coder',
+        taskPreview: 'inspect repo',
         depth: 1,
       }),
       expect.objectContaining({
         id: 'spawn-1:branch',
-        label: 'coder run',
+        label: 'coder collaboration',
+        phase: 'delegate',
+        targetAgentId: 'coder',
+        detail: 'Delegated to coder: inspect repo',
         depth: 2,
         parentId: 'spawn-1',
       }),

@@ -1,5 +1,20 @@
 import { useState } from 'react';
-import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, GitBranch, Link, MessageSquare, Wrench, XCircle } from 'lucide-react';
+import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  CircleDashed,
+  FileText,
+  GitBranch,
+  Link,
+  MessageSquare,
+  Pencil,
+  Search,
+  Terminal,
+  Users,
+  Wrench,
+  XCircle,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import type { TaskStep } from './task-visualization';
@@ -37,6 +52,22 @@ function GraphStatusIcon({ status }: { status: TaskStep['status'] }) {
   return <CircleDashed className="h-4 w-4" />;
 }
 
+function StepIcon({ step }: { step: TaskStep }) {
+  if (step.kind === 'thinking' || step.kind === 'message') return <MessageSquare className="h-3.5 w-3.5" />;
+  if (step.phase === 'delegate') return <Users className="h-3.5 w-3.5" />;
+  if (step.phase === 'search') return <Search className="h-3.5 w-3.5" />;
+  if (step.phase === 'read') return <FileText className="h-3.5 w-3.5" />;
+  if (step.phase === 'write') return <Pencil className="h-3.5 w-3.5" />;
+  if (step.phase === 'terminal') return <Terminal className="h-3.5 w-3.5" />;
+  if (step.kind === 'tool') return <Wrench className="h-3.5 w-3.5" />;
+  return <GraphStatusIcon status={step.status} />;
+}
+
+function stepPhaseLabelKey(phase: TaskStep['phase']): string | null {
+  if (!phase || phase === 'tool') return null;
+  return `executionGraph.phase.${phase}`;
+}
+
 function StepDetailCard({ step }: { step: TaskStep }) {
   const { t } = useTranslation('chat');
   const [expanded, setExpanded] = useState(false);
@@ -57,9 +88,13 @@ function StepDetailCard({ step }: { step: TaskStep }) {
   const isFlatRow = isTool || isSystem;
   const showRunningDots = (isTool || isThinking) && step.status === 'running';
   const hideStatusText = (isTool || isSystem) && step.status === 'completed';
-  const detailPreview = step.detail?.replace(/\s+/g, ' ').trim();
+  const delegationPreview = step.targetAgentId
+    ? `@${step.targetAgentId}${step.taskPreview ? ` · ${step.taskPreview}` : ''}`
+    : undefined;
+  const detailPreview = delegationPreview ?? step.detail?.replace(/\s+/g, ' ').trim();
   const canExpand = hasDetail;
-    const displayLabel = isThinking ? t('executionGraph.thinkingLabel') : (isTool ? displayToolLabel : step.label);
+  const displayLabel = isThinking ? t('executionGraph.thinkingLabel') : (isTool ? displayToolLabel : step.label);
+  const phaseLabelKey = stepPhaseLabelKey(step.phase);
 
   return (
     <div
@@ -102,6 +137,11 @@ function StepDetailCard({ step }: { step: TaskStep }) {
                 <p className="min-w-0 truncate text-xs leading-4 text-muted-foreground/80">
                   {detailPreview}
                 </p>
+              )}
+              {phaseLabelKey && (
+                <span className="shrink-0 whitespace-nowrap rounded-full bg-black/5 px-2 py-0.5 text-2xs font-medium uppercase tracking-wide text-muted-foreground dark:bg-white/10">
+                  {t(phaseLabelKey)}
+                </span>
               )}
               {!hideStatusText && !showRunningDots && (
                 <span className="shrink-0 whitespace-nowrap rounded-full bg-black/5 px-2 py-0.5 text-2xs font-medium uppercase tracking-wide text-muted-foreground dark:bg-white/10">
@@ -199,6 +239,7 @@ export function ExecutionGraphCard({
   };
 
   const toolCount = steps.filter((step) => step.kind === 'tool').length;
+  const delegateCount = steps.filter((step) => step.phase === 'delegate').length;
   const processCount = steps.length - toolCount;
   const shouldShowTrailingThinking = active && !suppressThinking;
 
@@ -213,7 +254,7 @@ export function ExecutionGraphCard({
       >
         <ChevronRight className="h-3.5 w-3.5 shrink-0 transition-transform group-hover:translate-x-0.5" />
         <span className="truncate">
-          {t('executionGraph.collapsedSummary', { toolCount, processCount })}
+          {t('executionGraph.collapsedSummary', { toolCount, processCount, delegateCount })}
         </span>
       </button>
     );
@@ -281,13 +322,7 @@ export function ExecutionGraphCard({
                       'flex h-6 w-6 items-center justify-center text-muted-foreground',
                     )}
                   >
-                    {step.kind === 'thinking'
-                      ? <MessageSquare className="h-3.5 w-3.5" />
-                      : step.kind === 'tool'
-                        ? <Wrench className="h-3.5 w-3.5" />
-                        : step.kind === 'message'
-                          ? <MessageSquare className="h-3.5 w-3.5" />
-                          : <GraphStatusIcon status={step.status} />}
+                    <StepIcon step={step} />
                   </div>
                 </div>
               </div>

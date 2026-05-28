@@ -10,15 +10,19 @@ import { isInternalMessage } from '@/stores/chat/helpers';
 import type { RawMessage, ToolStatus } from '@/stores/chat';
 
 export type TaskStepStatus = 'running' | 'completed' | 'error';
+export type TaskStepPhase = 'search' | 'read' | 'write' | 'terminal' | 'delegate' | 'message' | 'system' | 'tool';
 
 export interface TaskStep {
   id: string;
   label: string;
   status: TaskStepStatus;
   kind: 'thinking' | 'tool' | 'system' | 'message';
+  phase?: TaskStepPhase;
   detail?: string;
   depth: number;
   parentId?: string;
+  targetAgentId?: string;
+  taskPreview?: string;
   /** Extracted URL for web_fetch tool, used to render a clickable link icon. */
   url?: string;
 }
@@ -194,6 +198,42 @@ function makeToolId(prefix: string, name: string, index: number): string {
   return `${prefix}:${name}:${index}`;
 }
 
+function pickStringField(input: Record<string, unknown> | null | undefined, keys: string[]): string | undefined {
+  if (!input) return undefined;
+  for (const key of keys) {
+    const value = input[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function inferToolPhase(name: string): TaskStepPhase {
+  const normalized = name.toLowerCase();
+  if (/session|spawn|subagent|delegate|yield|agent/.test(normalized)) return 'delegate';
+  if (/search|grep|glob|ripgrep|rg|find|query/.test(normalized)) return 'search';
+  if (/fetch|read|open|view|cat|list|ls|stat/.test(normalized)) return 'read';
+  if (/write|edit|patch|apply|save|create|delete|move|rename|image_generate/.test(normalized)) return 'write';
+  if (/bash|shell|terminal|exec|command|powershell|cmd/.test(normalized)) return 'terminal';
+  return 'tool';
+}
+
+function enrichToolStep(step: TaskStep, input: Record<string, unknown> | null | undefined): TaskStep {
+  if (step.kind !== 'tool') return step;
+  const phase = step.phase ?? inferToolPhase(step.label);
+  const targetAgentId = phase === 'delegate'
+    ? pickStringField(input, ['agentId', 'agent_id', 'targetAgentId', 'target_agent_id', 'agent'])
+    : undefined;
+  const taskPreview = phase === 'delegate'
+    ? pickStringField(input, ['task', 'message', 'prompt', 'instruction', 'instructions'])
+    : undefined;
+  return {
+    ...step,
+    phase,
+    targetAgentId,
+    taskPreview: normalizeText(taskPreview),
+  };
+}
+
 export function parseAgentIdFromSessionKey(sessionKey: string): string | null {
   const parts = sessionKey.split(':');
   if (parts.length < 2 || parts[0] !== 'agent') return null;
@@ -233,6 +273,7 @@ function tryParseJsonObject(detail: string | undefined): Record<string, unknown>
 }
 
 function extractBranchAgent(step: TaskStep): string | null {
+  if (step.targetAgentId) return step.targetAgentId;
   const parsed = tryParseJsonObject(step.detail);
   const agentId = parsed?.agentId;
   if (typeof agentId === 'string' && agentId.trim()) return agentId.trim();
@@ -257,15 +298,20 @@ function attachTopology(steps: TaskStep[]): TaskStep[] {
     if (/sessions_spawn/i.test(step.label)) {
       const branchAgent = extractBranchAgent(step) || 'subagent';
       const branchNodeId = `${step.id}:branch`;
-      withTopology.push({ ...step, depth: 1, parentId: 'agent-run' });
+      withTopology.push({ ...step, phase: 'delegate', targetAgentId: branchAgent, depth: 1, parentId: 'agent-run' });
       withTopology.push({
         id: branchNodeId,
-        label: `${branchAgent} run`,
+        label: `${branchAgent} collaboration`,
         status: step.status,
         kind: 'system',
-        detail: `Spawned branch for ${branchAgent}`,
+        phase: 'delegate',
+        detail: step.taskPreview
+          ? `Delegated to ${branchAgent}: ${step.taskPreview}`
+          : `Delegated to ${branchAgent}`,
         depth: 2,
         parentId: step.id,
+        targetAgentId: branchAgent,
+        taskPreview: step.taskPreview,
       });
       activeBranchNodeId = branchNodeId;
       continue;
@@ -331,6 +377,7 @@ function appendDetailSegments(
       label: options.label,
       status: options.running && index === normalizedSegments.length - 1 ? 'running' : 'completed',
       kind: options.kind,
+      phase: options.kind === 'message' ? 'message' : undefined,
       detail,
       depth: 1,
     });
@@ -400,13 +447,15 @@ export function deriveTaskSteps({
       const input = tool.input as Record<string, unknown>;
       const url = tool.name === 'web_fetch' && typeof input?.url === 'string' ? input.url : undefined;
       upsertStep({
-        id: tool.id || makeToolId(`history-tool-${message.id || messageIndex}`, tool.name, index),
-        label: tool.name,
-        status: 'completed',
-        kind: 'tool',
-        detail: normalizeText(JSON.stringify(tool.input, null, 2)),
-        depth: 1,
-        url,
+        ...enrichToolStep({
+          id: tool.id || makeToolId(`history-tool-${message.id || messageIndex}`, tool.name, index),
+          label: tool.name,
+          status: 'completed',
+          kind: 'tool',
+          detail: normalizeText(JSON.stringify(tool.input, null, 2)),
+          depth: 1,
+          url,
+        }, input),
       });
     });
   }
@@ -437,12 +486,14 @@ export function deriveTaskSteps({
       activeToolNamesWithoutIds.add(tool.name);
     }
     upsertStep({
-      id,
-      label: tool.name,
-      status: tool.status,
-      kind: 'tool',
-      detail: normalizeText(tool.summary),
-      depth: 1,
+      ...enrichToolStep({
+        id,
+        label: tool.name,
+        status: tool.status,
+        kind: 'tool',
+        detail: normalizeText(tool.summary),
+        depth: 1,
+      }, null),
     });
   });
 
@@ -453,13 +504,15 @@ export function deriveTaskSteps({
       const input = tool.input as Record<string, unknown>;
       const url = tool.name === 'web_fetch' && typeof input?.url === 'string' ? input.url : undefined;
       upsertStep({
-        id,
-        label: tool.name,
-        status: 'running',
-        kind: 'tool',
-        detail: normalizeText(JSON.stringify(tool.input, null, 2)),
-        depth: 1,
-        url,
+        ...enrichToolStep({
+          id,
+          label: tool.name,
+          status: 'running',
+          kind: 'tool',
+          detail: normalizeText(JSON.stringify(tool.input, null, 2)),
+          depth: 1,
+          url,
+        }, input),
       });
     });
   }
