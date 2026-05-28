@@ -94,6 +94,34 @@ function normalizeDelegationConfig(value?: Partial<AgentDelegationConfig>, permi
   };
 }
 
+function sameStringList(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}
+
+function sameToolPermissions(a: AgentToolPermissions, b: AgentToolPermissions): boolean {
+  return a.files === b.files
+    && a.shell === b.shell
+    && a.browser === b.browser
+    && a.skills === b.skills
+    && a.memory === b.memory
+    && a.delegation === b.delegation;
+}
+
+function sameDelegationConfig(a: AgentDelegationConfig, b: AgentDelegationConfig): boolean {
+  return a.enabled === b.enabled
+    && a.delegationMode === b.delegationMode
+    && a.maxConcurrent === b.maxConcurrent
+    && a.maxSpawnDepth === b.maxSpawnDepth
+    && a.maxChildrenPerAgent === b.maxChildrenPerAgent
+    && a.runTimeoutSeconds === b.runTimeoutSeconds
+    && a.requireAgentId === b.requireAgentId
+    && sameStringList(a.allowAgents, b.allowAgents);
+}
+
 export function Agents() {
   const { t } = useTranslation('agents');
   const gatewayStatus = useGatewayStore((state) => state.status);
@@ -776,12 +804,16 @@ function AgentSettingsModal({
     setDelegationConfig(normalizeDelegationConfig(agent.delegationConfig, agent.toolPermissions || DEFAULT_TOOL_PERMISSIONS));
   }, [agent.delegationConfig, agent.description, agent.instructions, agent.name, agent.templateId, agent.toolPermissions]);
 
+  const originalToolPermissions = agent.toolPermissions || DEFAULT_TOOL_PERMISSIONS;
+  const normalizedDelegationConfig = normalizeDelegationConfig(delegationConfig, toolPermissions);
+  const originalDelegationConfig = normalizeDelegationConfig(agent.delegationConfig, originalToolPermissions);
+
   const hasNameChanges = name.trim() !== agent.name
     || description.trim() !== (agent.description || '')
     || instructions.trim() !== (agent.instructions || '')
     || templateId !== (agent.templateId || 'general')
-    || JSON.stringify(toolPermissions) !== JSON.stringify(agent.toolPermissions || DEFAULT_TOOL_PERMISSIONS)
-    || JSON.stringify(normalizeDelegationConfig(delegationConfig, toolPermissions)) !== JSON.stringify(normalizeDelegationConfig(agent.delegationConfig, agent.toolPermissions || DEFAULT_TOOL_PERMISSIONS));
+    || !sameToolPermissions(toolPermissions, originalToolPermissions)
+    || !sameDelegationConfig(normalizedDelegationConfig, originalDelegationConfig);
 
   const handleRequestClose = () => {
     if (savingName || hasNameChanges) {
@@ -801,7 +833,7 @@ function AgentSettingsModal({
         instructions: instructions.trim(),
         templateId,
         toolPermissions,
-        delegationConfig: normalizeDelegationConfig(delegationConfig, toolPermissions),
+        delegationConfig: normalizedDelegationConfig,
       });
       toast.success(t('toast.agentUpdated'));
     } catch (error) {

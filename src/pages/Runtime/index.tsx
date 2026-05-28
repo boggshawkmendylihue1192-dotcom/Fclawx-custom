@@ -348,11 +348,16 @@ export function Runtime() {
   }, []);
 
   useEffect(() => {
-    void refresh();
+    const initialRefreshTimer = window.setTimeout(() => {
+      void refresh();
+    }, 0);
     const timer = window.setInterval(() => {
       void refresh();
     }, 15_000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(initialRefreshTimer);
+      window.clearInterval(timer);
+    };
   }, [refresh]);
 
   const channelCounts = useMemo(() => countChannelStatuses(snapshot?.channels ?? []), [snapshot?.channels]);
@@ -361,7 +366,10 @@ export function Runtime() {
   const gatewaySummary = snapshot?.gateway;
   const healthState = gatewaySummary?.state ?? (gatewayHealth?.ok ? 'healthy' : 'degraded');
   const gatewayStateLabel = GATEWAY_STATE_LABELS[gatewayStatus.state] ?? gatewayStatus.state;
-  const gatewayReasons = gatewaySummary?.reasons ?? (gatewayHealth?.error ? [gatewayHealth.error] : []);
+  const gatewayReasons = useMemo(
+    () => gatewaySummary?.reasons ?? (gatewayHealth?.error ? [gatewayHealth.error] : []),
+    [gatewayHealth, gatewaySummary?.reasons],
+  );
   const runtimeFindings = useMemo(() => buildRuntimeFindings({
     gatewayStatus: gatewayStatus.state,
     gatewayReady: gatewayStatus.gatewayReady,

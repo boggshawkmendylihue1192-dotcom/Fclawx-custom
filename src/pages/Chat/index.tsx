@@ -154,11 +154,20 @@ function ChatDiagnosticsBadge({
   diagnostics: NonNullable<ReturnType<typeof useChatStore.getState>['chatDiagnostics']>;
   onCopy?: () => void;
 }) {
-  const now = Date.now();
+  const [liveNow, setLiveNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (diagnostics.status !== 'sending') return undefined;
+    const timer = window.setInterval(() => {
+      setLiveNow(Date.now());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [diagnostics.startedAt, diagnostics.status]);
+
   const firstEventMs = diagnostics.firstEventAt ? diagnostics.firstEventAt - diagnostics.startedAt : undefined;
   const firstDeltaMs = diagnostics.firstDeltaAt ? diagnostics.firstDeltaAt - diagnostics.startedAt : undefined;
   const historyPollMs = diagnostics.firstHistoryPollAt ? diagnostics.firstHistoryPollAt - diagnostics.startedAt : undefined;
-  const totalMs = (diagnostics.finalAt ?? now) - diagnostics.startedAt;
+  const totalMs = (diagnostics.finalAt ?? (diagnostics.status === 'sending' ? liveNow : diagnostics.lastEventAt ?? diagnostics.startedAt)) - diagnostics.startedAt;
   const statusText = diagnostics.status === 'sending'
     ? '进行中'
     : diagnostics.status === 'completed'
