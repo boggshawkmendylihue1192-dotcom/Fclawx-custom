@@ -12,7 +12,7 @@ import { EventEmitter } from 'events';
 import { setQuitting } from './app-state';
 
 export interface UpdateStatus {
-  status: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error';
+  status: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'installing' | 'error';
   info?: UpdateInfo;
   progress?: ProgressInfo;
   error?: string;
@@ -41,6 +41,7 @@ export class AppUpdater extends EventEmitter {
   private mainWindow: BrowserWindow | null = null;
   private status: UpdateStatus = { status: 'idle' };
   private autoInstallTimer: NodeJS.Timeout | null = null;
+  private installTimer: NodeJS.Timeout | null = null;
   private autoInstallCountdown = 0;
 
   /** Delay (in seconds) before auto-installing a downloaded update. */
@@ -208,8 +209,25 @@ export class AppUpdater extends EventEmitter {
    */
   quitAndInstall(): void {
     logger.info('[Updater] quitAndInstall called');
+    this.updateStatus({ status: 'installing', info: this.status.info });
     setQuitting();
     autoUpdater.quitAndInstall();
+  }
+
+  /**
+   * Schedule installation on the next tick so the renderer can paint the
+   * "installing" state before Electron begins the quit/install flow.
+   */
+  scheduleInstall(): void {
+    if (this.installTimer) return;
+
+    logger.info('[Updater] scheduleInstall called');
+    this.updateStatus({ status: 'installing', info: this.status.info });
+
+    this.installTimer = setTimeout(() => {
+      this.installTimer = null;
+      this.quitAndInstall();
+    }, 500);
   }
 
   /**
@@ -313,7 +331,7 @@ export function registerUpdateHandlers(
 
   // Install update and restart
   ipcMain.handle('update:install', () => {
-    updater.quitAndInstall();
+    updater.scheduleInstall();
     return { success: true };
   });
 

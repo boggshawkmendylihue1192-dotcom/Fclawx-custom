@@ -27,6 +27,7 @@ export type UpdateStatus =
   | 'not-available'
   | 'downloading'
   | 'downloaded'
+  | 'installing'
   | 'error';
 
 interface UpdateState {
@@ -197,7 +198,10 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   },
 
   installUpdate: () => {
-    void invokeIpc('update:install');
+    set({ status: 'installing', error: null });
+    void invokeIpc('update:install').catch((error) => {
+      set({ status: 'error', error: String(error) });
+    });
   },
 
   cancelAutoInstall: async () => {

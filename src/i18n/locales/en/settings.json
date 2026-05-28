@@ -166,6 +166,7 @@
       "downloading": "Downloading update...",
       "available": "Update available: v{{version}}",
       "downloaded": "Ready to install: v{{version}}",
+      "installing": "Preparing to install and restart...",
       "autoInstalling": "Restarting to install update in {{seconds}}s...",
       "failed": "Update check failed",
       "latest": "You have the latest version",
@@ -176,6 +177,7 @@
       "downloading": "Downloading...",
       "download": "Download Update",
       "install": "Install & Restart",
+      "installing": "Installing...",
       "cancelAutoInstall": "Cancel",
       "retry": "Retry",
       "check": "Check for Updates"
@@ -188,6 +190,8 @@
       "availableDescription": "Version v{{version}} is available. Download it when you're ready.",
       "downloadedTitle": "ClawX update ready",
       "downloadedDescription": "Version v{{version}} has been downloaded. Restart to install it.",
+      "installingTitle": "Installing update",
+      "installingDescription": "ClawX is preparing to install and restart. Please wait.",
       "unknownVersion": "new"
     },
     "help": "ClawX checks for updates automatically and prompts you before downloading or installing."

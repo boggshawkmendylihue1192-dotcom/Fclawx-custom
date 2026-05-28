@@ -107,6 +107,7 @@ export function UpdateSettings() {
     switch (status) {
       case 'checking':
       case 'downloading':
+      case 'installing':
         return <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />;
       case 'available':
         return <Download className="h-4 w-4 text-primary" />;
@@ -132,6 +133,8 @@ export function UpdateSettings() {
         return t('updates.status.available', { version: updateInfo?.version });
       case 'downloaded':
         return t('updates.status.downloaded', { version: updateInfo?.version });
+      case 'installing':
+        return t('updates.status.installing', { defaultValue: '正在准备安装并重启...' });
       case 'error':
         return error || t('updates.status.failed');
       case 'not-available':
@@ -155,6 +158,13 @@ export function UpdateSettings() {
           <Button disabled variant="outline" size="sm">
             <Loader2 className="h-4 w-4 mr-2 animate-spin" />
             {t('updates.action.downloading')}
+          </Button>
+        );
+      case 'installing':
+        return (
+          <Button disabled variant="outline" size="sm">
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            {t('updates.action.installing', { defaultValue: '正在安装...' })}
           </Button>
         );
       case 'available':

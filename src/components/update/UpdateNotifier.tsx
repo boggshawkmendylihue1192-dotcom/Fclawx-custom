@@ -5,6 +5,7 @@ import { useUpdateStore } from '@/stores/update';
 
 const AVAILABLE_TOAST_ID = 'clawx-update-available';
 const DOWNLOADED_TOAST_ID = 'clawx-update-downloaded';
+const INSTALLING_TOAST_ID = 'clawx-update-installing';
 
 /**
  * Shows global update prompts outside the Settings page.
@@ -30,6 +31,10 @@ export function UpdateNotifier() {
 
     if (status !== 'downloaded') {
       toast.dismiss(DOWNLOADED_TOAST_ID);
+    }
+
+    if (status !== 'installing') {
+      toast.dismiss(INSTALLING_TOAST_ID);
     }
 
     if (status === 'available') {
@@ -68,6 +73,17 @@ export function UpdateNotifier() {
             installUpdate();
           },
         },
+      });
+      return;
+    }
+
+    if (status === 'installing') {
+      toast.loading(t('updates.toast.installingTitle', { defaultValue: '正在安装更新' }), {
+        id: INSTALLING_TOAST_ID,
+        description: t('updates.toast.installingDescription', {
+          defaultValue: 'ClawX 正在准备安装并重启，请稍候。',
+        }),
+        duration: Infinity,
       });
     }
   }, [downloadUpdate, installUpdate, status, t, updateInfo?.version]);
