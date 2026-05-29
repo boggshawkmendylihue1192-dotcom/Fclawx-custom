@@ -27,9 +27,17 @@ import { useChatStore } from '@/stores/chat';
 import { useWorkbenchStore } from '@/stores/workbench';
 import { useWorkflowsStore } from '@/stores/workflows';
 import { invokeIpc } from '@/lib/api-client';
+import { hostApiFetch } from '@/lib/host-api';
 import { cn } from '@/lib/utils';
 import type { AgentSummary } from '@/types/agent';
 import type { WorkbenchProject } from '@/types/workbench';
+
+interface WorkspaceEntry {
+  path: string;
+  name: string;
+  type: 'file' | 'dir';
+  size?: number;
+}
 
 const inputClasses = 'h-[42px] rounded-xl text-sm bg-transparent border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:border-blue-500 shadow-sm transition-all text-foreground placeholder:text-foreground/40';
 const selectClasses = 'h-[42px] w-full rounded-xl text-sm bg-transparent border border-black/10 dark:border-white/10 px-3 text-foreground';
@@ -75,6 +83,7 @@ export function Workbench() {
     saveMemory,
     deleteMemory,
     saveAlwaysOnTask,
+    markAlwaysOnTaskRun,
     deleteAlwaysOnTask,
     saveRoutingRule,
     deleteRoutingRule,
@@ -82,16 +91,20 @@ export function Workbench() {
     deleteReport,
   } = useWorkbenchStore();
   const [selectedProjectId, setSelectedProjectId] = useState('');
+  const [workspaceEntries, setWorkspaceEntries] = useState<WorkspaceEntry[]>([]);
+  const [selectedFilePath, setSelectedFilePath] = useState('');
+  const [selectedFileContent, setSelectedFileContent] = useState('');
+  const [gitStatus, setGitStatus] = useState('');
   const selectedProject = projects.find((project) => project.id === selectedProjectId) || projects[0] || null;
 
   useEffect(() => {
-    hydrate();
+    void hydrate();
     void Promise.all([fetchAgents(), fetchWorkflows()]);
   }, [fetchAgents, fetchWorkflows, hydrate]);
 
   useEffect(() => {
     if (!hydrated || projects.length > 0 || agents.length === 0) return;
-    agents.forEach((agent) => saveProject(seedProjectFromAgent(agent)));
+    agents.forEach((agent) => void saveProject(seedProjectFromAgent(agent)));
   }, [agents, hydrated, projects.length, saveProject]);
 
   useEffect(() => {
@@ -111,12 +124,85 @@ export function Workbench() {
     [reports, selectedProject],
   );
 
+  const refreshWorkspaceTools = async () => {
+    if (!selectedProject?.workspace) return;
+    try {
+      const [tree, git] = await Promise.all([
+        hostApiFetch<{ entries?: WorkspaceEntry[] }>(`/api/workbench/files?workspace=${encodeURIComponent(selectedProject.workspace)}`),
+        hostApiFetch<{ output?: string }>(`/api/workbench/git-status?workspace=${encodeURIComponent(selectedProject.workspace)}`),
+      ]);
+      setWorkspaceEntries(tree.entries ?? []);
+      setGitStatus(git.output || '没有 Git 输出。');
+    } catch (error) {
+      setGitStatus(String(error));
+    }
+  };
+
+  useEffect(() => {
+    setSelectedFilePath('');
+    setSelectedFileContent('');
+    setWorkspaceEntries([]);
+    setGitStatus('');
+    void refreshWorkspaceTools();
+  }, [selectedProject?.id, selectedProject?.workspace]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const tick = () => {
+      const now = Date.now();
+      const due = alwaysOnTasks.find((task) => (
+        task.status === 'active'
+        && task.cadence !== 'manual'
+        && typeof task.nextRunAt === 'number'
+        && task.nextRunAt <= now
+      ));
+      if (!due) return;
+      const project = projects.find((item) => item.id === due.projectId);
+      if (!project) return;
+      void runAlwaysOnTask(due.title, due.objective, project, due.id);
+    };
+    const timer = window.setInterval(tick, 60_000);
+    tick();
+    return () => window.clearInterval(timer);
+  }, [alwaysOnTasks, hydrated, projects]);
+
+  const openWorkspaceFile = async (path: string) => {
+    if (!selectedProject?.workspace) return;
+    try {
+      const result = await hostApiFetch<{ content?: string }>(
+        `/api/workbench/file?workspace=${encodeURIComponent(selectedProject.workspace)}&path=${encodeURIComponent(path)}`,
+      );
+      setSelectedFilePath(path);
+      setSelectedFileContent(result.content ?? '');
+    } catch (error) {
+      toast.error(String(error));
+    }
+  };
+
+  const saveWorkspaceFile = async () => {
+    if (!selectedProject?.workspace || !selectedFilePath) return;
+    try {
+      await hostApiFetch('/api/workbench/file', {
+        method: 'PUT',
+        body: JSON.stringify({
+          workspace: selectedProject.workspace,
+          path: selectedFilePath,
+          content: selectedFileContent,
+        }),
+      });
+      toast.success('文件已保存');
+      await refreshWorkspaceTools();
+    } catch (error) {
+      toast.error(String(error));
+    }
+  };
+
   const createMemory = () => {
     if (!selectedProject) return;
     const title = window.prompt('记忆标题');
     if (!title) return;
     const content = window.prompt('记忆内容');
-    saveMemory({
+    void saveMemory({
       projectId: selectedProject.id,
       title,
       content: content || '',
@@ -132,7 +218,7 @@ export function Workbench() {
     const title = window.prompt('后台任务名称');
     if (!title) return;
     const objective = window.prompt('任务目标');
-    saveAlwaysOnTask({
+    void saveAlwaysOnTask({
       projectId: selectedProject.id,
       title,
       objective: objective || '',
@@ -147,7 +233,7 @@ export function Workbench() {
     const name = window.prompt('路由规则名称');
     if (!name) return;
     const matcher = window.prompt('匹配关键词，例如：搜索,代码,总结');
-    saveRoutingRule({
+    void saveRoutingRule({
       name,
       matcher: matcher || '',
       complexity: 'normal',
@@ -161,7 +247,7 @@ export function Workbench() {
   const createReportFromLatestRun = () => {
     if (!selectedProject) return;
     const latest = runs[0];
-    saveReport({
+    void saveReport({
       projectId: selectedProject.id,
       title: latest ? `${latest.workflowName} 运行报告` : '手动运行报告',
       summary: latest
@@ -172,19 +258,35 @@ export function Workbench() {
     toast.success('报告已生成');
   };
 
-  const runAlwaysOnTask = async (title: string, objective: string) => {
-    if (!selectedProject) return;
-    navigate('/');
-    await sendMessage([
-      `执行 Always-on 后台任务：${title}`,
-      `项目：${selectedProject.name}`,
-      `工作区：${selectedProject.workspace || '未配置'}`,
-      '',
-      '要求：',
-      objective,
-      '',
-      '请输出进度、结果文件、下一步建议，并把可长期记忆的事实单独列出。',
-    ].join('\n'), undefined, selectedProject.agentId);
+  const runAlwaysOnTask = async (title: string, objective: string, project = selectedProject, taskId?: string) => {
+    if (!project) return;
+    const startedAt = Date.now();
+    try {
+      if (taskId) await markAlwaysOnTaskRun(taskId, 'queued', project.agentId);
+      navigate('/');
+      if (taskId) await markAlwaysOnTaskRun(taskId, 'running', project.agentId);
+      await sendMessage([
+        `执行 Always-on 后台任务：${title}`,
+        `项目：${project.name}`,
+        `工作区：${project.workspace || '未配置'}`,
+        '',
+        '要求：',
+        objective,
+        '',
+        '请输出进度、结果文件、下一步建议，并把可长期记忆的事实单独列出。',
+      ].join('\n'), undefined, project.agentId);
+      if (taskId) await markAlwaysOnTaskRun(taskId, 'completed', project.agentId);
+      await saveReport({
+        projectId: project.id,
+        title: `${title} 运行报告`,
+        summary: `Always-on 后台任务已提交给 ${agentName(agents, project.agentId)}。\n工作区：${project.workspace || '未配置'}`,
+        status: 'final',
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      if (taskId) await markAlwaysOnTaskRun(taskId, 'failed', project.agentId);
+      toast.error(String(error));
+    }
   };
 
   return (
@@ -200,7 +302,7 @@ export function Workbench() {
               <RefreshCw className="mr-2 h-4 w-4" />
               刷新
             </Button>
-            <Button onClick={() => agents[0] && saveProject(seedProjectFromAgent(agents[0]))} className="h-9 rounded-full px-4">
+            <Button onClick={() => agents[0] && void saveProject(seedProjectFromAgent(agents[0]))} className="h-9 rounded-full px-4">
               <Plus className="mr-2 h-4 w-4" />
               新建工作区
             </Button>
@@ -258,11 +360,11 @@ export function Workbench() {
                 <CardContent className="grid gap-4 md:grid-cols-[1fr_220px_180px]">
                   <div className="space-y-2">
                     <Label>工作区路径</Label>
-                    <Input value={selectedProject.workspace} onChange={(event) => saveProject({ ...selectedProject, workspace: event.target.value })} className={inputClasses} />
+                    <Input value={selectedProject.workspace} onChange={(event) => void saveProject({ ...selectedProject, workspace: event.target.value })} className={inputClasses} />
                   </div>
                   <div className="space-y-2">
                     <Label>绑定智能体</Label>
-                    <select value={selectedProject.agentId} onChange={(event) => saveProject({ ...selectedProject, agentId: event.target.value })} className={selectClasses}>
+                    <select value={selectedProject.agentId} onChange={(event) => void saveProject({ ...selectedProject, agentId: event.target.value })} className={selectClasses}>
                       {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
                     </select>
                   </div>
@@ -271,7 +373,7 @@ export function Workbench() {
                       <FolderOpen className="mr-2 h-4 w-4" />
                       打开
                     </Button>
-                    <Button variant="ghost" size="icon" onClick={() => deleteProject(selectedProject.id)} className="h-[42px] w-[42px] rounded-xl text-destructive">
+                    <Button variant="ghost" size="icon" onClick={() => void deleteProject(selectedProject.id)} className="h-[42px] w-[42px] rounded-xl text-destructive">
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
@@ -282,7 +384,7 @@ export function Workbench() {
             <div className="grid gap-4 xl:grid-cols-2">
               <CapabilityCard title="白盒记忆管理" icon={<Brain className="h-5 w-5" />} actionLabel="新增记忆" onAction={createMemory}>
                 {projectMemories.slice(0, 5).map((memory) => (
-                  <Row key={memory.id} title={memory.title} detail={`${memory.confidence} · ${memory.source} · ${formatTime(memory.updatedAt)}`} onDelete={() => deleteMemory(memory.id)} />
+                  <Row key={memory.id} title={memory.title} detail={`${memory.confidence} · ${memory.source} · ${formatTime(memory.updatedAt)}`} onDelete={() => void deleteMemory(memory.id)} />
                 ))}
                 {projectMemories.length === 0 && <EmptyText text="暂无记忆。可把重要偏好、项目事实、错误修正写入这里。" />}
               </CapabilityCard>
@@ -293,10 +395,10 @@ export function Workbench() {
                     <div className="flex items-center justify-between gap-2">
                       <p className="truncate text-sm font-semibold text-foreground">{task.title}</p>
                       <div className="flex items-center gap-1">
-                        <Button variant="ghost" size="icon" onClick={() => void runAlwaysOnTask(task.title, task.objective)} className="h-7 w-7">
+                        <Button variant="ghost" size="icon" onClick={() => void runAlwaysOnTask(task.title, task.objective, selectedProject, task.id)} className="h-7 w-7">
                           <Play className="h-3.5 w-3.5" />
                         </Button>
-                        <Button variant="ghost" size="icon" onClick={() => deleteAlwaysOnTask(task.id)} className="h-7 w-7 text-destructive">
+                        <Button variant="ghost" size="icon" onClick={() => void deleteAlwaysOnTask(task.id)} className="h-7 w-7 text-destructive">
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
@@ -309,14 +411,14 @@ export function Workbench() {
 
               <CapabilityCard title="智能模型路由" icon={<Route className="h-5 w-5" />} actionLabel="新增规则" onAction={createRoutingRule}>
                 {routingRules.slice(0, 5).map((rule) => (
-                  <Row key={rule.id} title={rule.name} detail={`${rule.matcher || '全部'} · ${rule.complexity} · ${rule.preferredModelStrategy} · ${agentName(agents, rule.targetAgentId)}`} onDelete={() => deleteRoutingRule(rule.id)} />
+                  <Row key={rule.id} title={rule.name} detail={`${rule.matcher || '全部'} · ${rule.complexity} · ${rule.preferredModelStrategy} · ${agentName(agents, rule.targetAgentId)}`} onDelete={() => void deleteRoutingRule(rule.id)} />
                 ))}
                 {routingRules.length === 0 && <EmptyText text="暂无路由规则。可以按关键词、复杂度和模型策略把任务分发给不同智能体。" />}
               </CapabilityCard>
 
               <CapabilityCard title="任务历史 / 运行报告" icon={<History className="h-5 w-5" />} actionLabel="生成报告" onAction={createReportFromLatestRun}>
                 {projectReports.slice(0, 3).map((report) => (
-                  <Row key={report.id} title={report.title} detail={`${report.status} · ${formatTime(report.createdAt)}`} onDelete={() => deleteReport(report.id)} />
+                  <Row key={report.id} title={report.title} detail={`${report.status} · ${formatTime(report.createdAt)}`} onDelete={() => void deleteReport(report.id)} />
                 ))}
                 {runs.slice(0, 3).map((run) => (
                   <div key={run.id} className="rounded-xl bg-black/5 p-3 text-sm dark:bg-white/5">
@@ -330,7 +432,63 @@ export function Workbench() {
             <div className="grid gap-4 xl:grid-cols-3">
               <ActionTile icon={<Bot className="h-5 w-5" />} title="更完整的子智能体过程展示" detail="聊天执行图已显示并行智能体看板、spawn/yield、记录跳转和停止总运行。" action="打开聊天" onClick={() => navigate('/')} />
               <ActionTile icon={<Package className="h-5 w-5" />} title="插件 / MCP 扩展体系" detail="当前先接入 Skills 与 OpenClaw 插件；后续可把 MCP 服务做成独立管理页。" action="打开技能" onClick={() => navigate('/skills')} />
-              <ActionTile icon={<Code2 className="h-5 w-5" />} title="文件树 + Git + 代码工作区" detail="工作区文件浏览已在聊天右侧面板可用；Git/代码审查可由绑定智能体直接运行。" action="发起 Git 检查" onClick={() => selectedProject && void sendMessage(`检查工作区 Git 状态并总结代码风险：${selectedProject.workspace}`, undefined, selectedProject.agentId)} />
+              <ActionTile icon={<Code2 className="h-5 w-5" />} title="文件树 + Git + 代码工作区" detail="下方已接入工作区文件浏览、Git 状态和轻量文本编辑；代码审查可由绑定智能体直接运行。" action="发起 Git 检查" onClick={() => selectedProject && void sendMessage(`检查工作区 Git 状态并总结代码风险：${selectedProject.workspace}`, undefined, selectedProject.agentId)} />
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-[420px_1fr]">
+              <Card className="rounded-2xl border-black/10 bg-transparent dark:border-white/10">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <Code2 className="h-5 w-5" />
+                    文件树 / Git
+                  </CardTitle>
+                  <Button variant="outline" onClick={() => void refreshWorkspaceTools()} className="h-8 rounded-full px-3 text-xs">
+                    <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                    刷新
+                  </Button>
+                </CardHeader>
+                <CardContent className="grid gap-3">
+                  <div className="max-h-64 overflow-y-auto rounded-xl bg-black/5 p-2 text-sm dark:bg-white/5">
+                    {workspaceEntries.map((entry) => (
+                      <button
+                        key={entry.path}
+                        type="button"
+                        disabled={entry.type !== 'file'}
+                        onClick={() => void openWorkspaceFile(entry.path)}
+                        className={cn(
+                          'flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-xs',
+                          entry.type === 'file' ? 'hover:bg-black/5 dark:hover:bg-white/10' : 'text-muted-foreground',
+                          selectedFilePath === entry.path && 'bg-primary/10 text-foreground',
+                        )}
+                      >
+                        <span className="w-4 shrink-0">{entry.type === 'dir' ? 'dir' : 'file'}</span>
+                        <span className="truncate">{entry.path}</span>
+                      </button>
+                    ))}
+                    {workspaceEntries.length === 0 && <EmptyText text="未读取到文件。请确认工作区路径存在。" />}
+                  </div>
+                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-xl bg-black/5 p-3 text-xs text-muted-foreground dark:bg-white/5">{gitStatus || '暂无 Git 状态。'}</pre>
+                </CardContent>
+              </Card>
+
+              <Card className="rounded-2xl border-black/10 bg-transparent dark:border-white/10">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                  <CardTitle className="truncate text-lg">{selectedFilePath || '代码编辑器'}</CardTitle>
+                  <Button variant="outline" disabled={!selectedFilePath} onClick={() => void saveWorkspaceFile()} className="h-8 rounded-full px-3 text-xs">
+                    保存
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  <textarea
+                    value={selectedFileContent}
+                    onChange={(event) => setSelectedFileContent(event.target.value)}
+                    disabled={!selectedFilePath}
+                    spellCheck={false}
+                    className="min-h-[320px] w-full resize-y rounded-xl border border-black/10 bg-black/5 p-3 font-mono text-xs text-foreground outline-none focus:border-primary/60 dark:border-white/10 dark:bg-white/5"
+                    placeholder="从左侧选择一个文本文件进行查看和编辑。"
+                  />
+                </CardContent>
+              </Card>
             </div>
           </div>
         </div>

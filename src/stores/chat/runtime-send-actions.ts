@@ -1,5 +1,6 @@
 import { invokeIpc } from '@/lib/api-client';
 import { useAgentsStore } from '@/stores/agents';
+import { buildWorkbenchRuntimeContext } from '@/stores/workbench';
 import {
   clearErrorRecoveryTimer,
   clearHistoryPoll,
@@ -56,8 +57,11 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       const trimmed = text.trim();
       if (!trimmed && (!attachments || attachments.length === 0)) return;
       const currentSendGeneration = ++sendGeneration;
+      const workbenchContext = buildWorkbenchRuntimeContext(trimmed, targetAgentId);
+      const routedAgentId = workbenchContext.targetAgentId ?? targetAgentId;
+      const runtimeMessage = workbenchContext.message;
 
-      const targetSessionKey = resolveMainSessionKeyForAgent(targetAgentId) ?? get().currentSessionKey;
+      const targetSessionKey = resolveMainSessionKeyForAgent(routedAgentId) ?? get().currentSessionKey;
 
       if (get().sending && targetSessionKey === get().currentSessionKey) {
         return;
@@ -216,7 +220,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
             'chat:sendWithMedia',
             {
               sessionKey: currentSessionKey,
-              message: trimmed || 'Process the attached file(s).',
+              message: runtimeMessage || 'Process the attached file(s).',
               deliver: false,
               idempotencyKey,
               media: attachments.map((a) => ({
@@ -232,7 +236,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
             'chat.send',
             {
               sessionKey: currentSessionKey,
-              message: trimmed,
+              message: runtimeMessage,
               deliver: false,
               idempotencyKey,
             },

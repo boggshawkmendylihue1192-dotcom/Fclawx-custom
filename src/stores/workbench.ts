@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { hostApiFetch } from '@/lib/host-api';
 import type {
   AlwaysOnTask,
   RoutingRule,
@@ -8,21 +9,24 @@ import type {
   WorkbenchSnapshot,
 } from '@/types/workbench';
 
-const STORAGE_KEY = 'clawx:pilotdeck-workbench';
+const LEGACY_STORAGE_KEY = 'clawx:pilotdeck-workbench';
 
 interface WorkbenchState extends WorkbenchSnapshot {
   hydrated: boolean;
-  hydrate: () => void;
-  saveProject: (project: Partial<WorkbenchProject>) => void;
-  deleteProject: (id: string) => void;
-  saveMemory: (memory: Partial<WorkbenchMemory>) => void;
-  deleteMemory: (id: string) => void;
-  saveAlwaysOnTask: (task: Partial<AlwaysOnTask>) => void;
-  deleteAlwaysOnTask: (id: string) => void;
-  saveRoutingRule: (rule: Partial<RoutingRule>) => void;
-  deleteRoutingRule: (id: string) => void;
-  saveReport: (report: Partial<WorkbenchReport>) => void;
-  deleteReport: (id: string) => void;
+  loading: boolean;
+  error: string | null;
+  hydrate: () => Promise<void>;
+  saveProject: (project: Partial<WorkbenchProject>) => Promise<void>;
+  deleteProject: (id: string) => Promise<void>;
+  saveMemory: (memory: Partial<WorkbenchMemory>) => Promise<void>;
+  deleteMemory: (id: string) => Promise<void>;
+  saveAlwaysOnTask: (task: Partial<AlwaysOnTask>) => Promise<void>;
+  markAlwaysOnTaskRun: (id: string, status: AlwaysOnTask['lastRunStatus'], sessionKey?: string) => Promise<void>;
+  deleteAlwaysOnTask: (id: string) => Promise<void>;
+  saveRoutingRule: (rule: Partial<RoutingRule>) => Promise<void>;
+  deleteRoutingRule: (id: string) => Promise<void>;
+  saveReport: (report: Partial<WorkbenchReport>) => Promise<void>;
+  deleteReport: (id: string) => Promise<void>;
 }
 
 const emptySnapshot: WorkbenchSnapshot = {
@@ -33,189 +37,206 @@ const emptySnapshot: WorkbenchSnapshot = {
   reports: [],
 };
 
-function now() {
-  return Date.now();
+function applySnapshot(snapshot: Partial<WorkbenchSnapshot> | undefined): WorkbenchSnapshot {
+  return {
+    projects: Array.isArray(snapshot?.projects) ? snapshot.projects : [],
+    memories: Array.isArray(snapshot?.memories) ? snapshot.memories : [],
+    alwaysOnTasks: Array.isArray(snapshot?.alwaysOnTasks) ? snapshot.alwaysOnTasks : [],
+    routingRules: Array.isArray(snapshot?.routingRules) ? snapshot.routingRules : [],
+    reports: Array.isArray(snapshot?.reports) ? snapshot.reports : [],
+  };
 }
 
-function readSnapshot(): WorkbenchSnapshot {
-  if (typeof window === 'undefined') return emptySnapshot;
+function readLegacySnapshot(): Partial<WorkbenchSnapshot> | null {
+  if (typeof window === 'undefined') return null;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return emptySnapshot;
-    const parsed = JSON.parse(raw) as Partial<WorkbenchSnapshot>;
-    return {
-      projects: Array.isArray(parsed.projects) ? parsed.projects : [],
-      memories: Array.isArray(parsed.memories) ? parsed.memories : [],
-      alwaysOnTasks: Array.isArray(parsed.alwaysOnTasks) ? parsed.alwaysOnTasks : [],
-      routingRules: Array.isArray(parsed.routingRules) ? parsed.routingRules : [],
-      reports: Array.isArray(parsed.reports) ? parsed.reports : [],
-    };
+    const raw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
+    return raw ? JSON.parse(raw) as Partial<WorkbenchSnapshot> : null;
   } catch {
-    return emptySnapshot;
+    return null;
   }
 }
 
-function writeSnapshot(snapshot: WorkbenchSnapshot): void {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+async function migrateLegacySnapshot(snapshot: WorkbenchSnapshot): Promise<WorkbenchSnapshot> {
+  const legacy = readLegacySnapshot();
+  if (!legacy) return snapshot;
+  if (snapshot.projects.length > 0 || snapshot.memories.length > 0 || snapshot.alwaysOnTasks.length > 0) {
+    return snapshot;
+  }
+
+  let latest = snapshot;
+  for (const project of legacy.projects ?? []) {
+    latest = applySnapshot(await hostApiFetch<WorkbenchSnapshot>('/api/workbench/projects', {
+      method: 'POST',
+      body: JSON.stringify(project),
+    }));
+  }
+  for (const memory of legacy.memories ?? []) {
+    latest = applySnapshot(await hostApiFetch<WorkbenchSnapshot>('/api/workbench/memories', {
+      method: 'POST',
+      body: JSON.stringify(memory),
+    }));
+  }
+  for (const task of legacy.alwaysOnTasks ?? []) {
+    latest = applySnapshot(await hostApiFetch<WorkbenchSnapshot>('/api/workbench/tasks', {
+      method: 'POST',
+      body: JSON.stringify(task),
+    }));
+  }
+  for (const rule of legacy.routingRules ?? []) {
+    latest = applySnapshot(await hostApiFetch<WorkbenchSnapshot>('/api/workbench/routing-rules', {
+      method: 'POST',
+      body: JSON.stringify(rule),
+    }));
+  }
+  for (const report of legacy.reports ?? []) {
+    latest = applySnapshot(await hostApiFetch<WorkbenchSnapshot>('/api/workbench/reports', {
+      method: 'POST',
+      body: JSON.stringify(report),
+    }));
+  }
+  window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+  return latest;
 }
 
-function upsertById<T extends { id: string; createdAt?: number; updatedAt?: number }>(items: T[], item: T): T[] {
-  const next = items.some((candidate) => candidate.id === item.id)
-    ? items.map((candidate) => candidate.id === item.id ? item : candidate)
-    : [item, ...items];
-  return next;
+export function buildWorkbenchRuntimeContext(message: string, requestedAgentId?: string | null): {
+  message: string;
+  targetAgentId?: string | null;
+  routeNote?: string;
+} {
+  const state = useWorkbenchStore.getState();
+  const lowerMessage = message.toLowerCase();
+  const route = state.routingRules.find((rule) => {
+    if (!rule.enabled) return false;
+    const matcher = rule.matcher.trim().toLowerCase();
+    if (!matcher) return false;
+    return matcher.split(/[,，\s]+/).filter(Boolean).some((keyword) => lowerMessage.includes(keyword));
+  });
+  const targetAgentId = requestedAgentId || route?.targetAgentId || null;
+  const project = state.projects.find((item) => {
+    if (item.status !== 'active') return false;
+    return targetAgentId ? item.agentId === targetAgentId : item.agentId === 'main';
+  }) ?? state.projects.find((item) => item.status === 'active');
+
+  const memories = project
+    ? state.memories
+      .filter((memory) => memory.projectId === project.id && memory.status === 'active')
+      .slice(0, 8)
+    : [];
+
+  const contextLines = [
+    project ? `工作台项目：${project.name}` : '',
+    project?.workspace ? `工作区路径：${project.workspace}` : '',
+    route ? `智能路由：${route.name} / ${route.preferredModelStrategy} / ${route.complexity}` : '',
+    memories.length > 0 ? '白盒记忆：' : '',
+    ...memories.map((memory) => `- ${memory.title}: ${memory.content}`),
+  ].filter(Boolean);
+
+  if (contextLines.length === 0) {
+    return { message, targetAgentId };
+  }
+
+  return {
+    message: [
+      '<workbench_context>',
+      ...contextLines,
+      '</workbench_context>',
+      '',
+      message,
+    ].join('\n'),
+    targetAgentId,
+    routeNote: route?.name,
+  };
 }
 
 export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   ...emptySnapshot,
   hydrated: false,
+  loading: false,
+  error: null,
 
-  hydrate: () => {
-    if (get().hydrated) return;
-    set({ ...readSnapshot(), hydrated: true });
+  hydrate: async () => {
+    if (get().loading) return;
+    set({ loading: true, error: null });
+    try {
+      const snapshot = applySnapshot(await hostApiFetch<WorkbenchSnapshot>('/api/workbench'));
+      const migrated = await migrateLegacySnapshot(snapshot);
+      set({ ...migrated, hydrated: true, loading: false });
+    } catch (error) {
+      set({ loading: false, error: String(error), hydrated: true });
+    }
   },
 
-  saveProject: (project) => {
-    const timestamp = now();
-    const current = get();
-    const existing = project.id ? current.projects.find((candidate) => candidate.id === project.id) : undefined;
-    const nextProject: WorkbenchProject = {
-      id: project.id || crypto.randomUUID(),
-      name: project.name?.trim() || existing?.name || '新工作区',
-      description: project.description ?? existing?.description ?? '',
-      agentId: project.agentId || existing?.agentId || 'main',
-      workspace: project.workspace ?? existing?.workspace ?? '',
-      status: project.status || existing?.status || 'active',
-      createdAt: existing?.createdAt || timestamp,
-      updatedAt: timestamp,
-    };
-    const snapshot = { ...current, projects: upsertById(current.projects, nextProject) };
-    writeSnapshot(snapshot);
-    set({ projects: snapshot.projects });
-  },
-
-  deleteProject: (id) => {
-    const current = get();
-    const snapshot = {
-      ...current,
-      projects: current.projects.filter((item) => item.id !== id),
-      memories: current.memories.filter((item) => item.projectId !== id),
-      alwaysOnTasks: current.alwaysOnTasks.filter((item) => item.projectId !== id),
-      reports: current.reports.filter((item) => item.projectId !== id),
-    };
-    writeSnapshot(snapshot);
-    set({
-      projects: snapshot.projects,
-      memories: snapshot.memories,
-      alwaysOnTasks: snapshot.alwaysOnTasks,
-      reports: snapshot.reports,
+  saveProject: async (project) => {
+    const snapshot = await hostApiFetch<WorkbenchSnapshot>('/api/workbench/projects', {
+      method: 'POST',
+      body: JSON.stringify(project),
     });
+    set(applySnapshot(snapshot));
   },
 
-  saveMemory: (memory) => {
-    const timestamp = now();
-    const current = get();
-    const existing = memory.id ? current.memories.find((candidate) => candidate.id === memory.id) : undefined;
-    const nextMemory: WorkbenchMemory = {
-      id: memory.id || crypto.randomUUID(),
-      projectId: memory.projectId || existing?.projectId || current.projects[0]?.id || '',
-      title: memory.title?.trim() || existing?.title || '记忆条目',
-      content: memory.content ?? existing?.content ?? '',
-      source: memory.source ?? existing?.source ?? 'manual',
-      confidence: memory.confidence || existing?.confidence || 'medium',
-      status: memory.status || existing?.status || 'active',
-      createdAt: existing?.createdAt || timestamp,
-      updatedAt: timestamp,
-    };
-    const snapshot = { ...current, memories: upsertById(current.memories, nextMemory) };
-    writeSnapshot(snapshot);
-    set({ memories: snapshot.memories });
+  deleteProject: async (id) => {
+    const snapshot = await hostApiFetch<WorkbenchSnapshot>(`/api/workbench/projects/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    set(applySnapshot(snapshot));
   },
 
-  deleteMemory: (id) => {
-    const current = get();
-    const memories = current.memories.filter((item) => item.id !== id);
-    writeSnapshot({ ...current, memories });
-    set({ memories });
+  saveMemory: async (memory) => {
+    const snapshot = await hostApiFetch<WorkbenchSnapshot>('/api/workbench/memories', {
+      method: 'POST',
+      body: JSON.stringify(memory),
+    });
+    set(applySnapshot(snapshot));
   },
 
-  saveAlwaysOnTask: (task) => {
-    const timestamp = now();
-    const current = get();
-    const existing = task.id ? current.alwaysOnTasks.find((candidate) => candidate.id === task.id) : undefined;
-    const nextTask: AlwaysOnTask = {
-      id: task.id || crypto.randomUUID(),
-      projectId: task.projectId || existing?.projectId || current.projects[0]?.id || '',
-      title: task.title?.trim() || existing?.title || '后台任务',
-      cadence: task.cadence || existing?.cadence || 'manual',
-      objective: task.objective ?? existing?.objective ?? '',
-      status: task.status || existing?.status || 'active',
-      lastRunAt: task.lastRunAt ?? existing?.lastRunAt,
-      nextRunHint: task.nextRunHint ?? existing?.nextRunHint,
-      createdAt: existing?.createdAt || timestamp,
-      updatedAt: timestamp,
-    };
-    const snapshot = { ...current, alwaysOnTasks: upsertById(current.alwaysOnTasks, nextTask) };
-    writeSnapshot(snapshot);
-    set({ alwaysOnTasks: snapshot.alwaysOnTasks });
+  deleteMemory: async (id) => {
+    const snapshot = await hostApiFetch<WorkbenchSnapshot>(`/api/workbench/memories/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    set(applySnapshot(snapshot));
   },
 
-  deleteAlwaysOnTask: (id) => {
-    const current = get();
-    const alwaysOnTasks = current.alwaysOnTasks.filter((item) => item.id !== id);
-    writeSnapshot({ ...current, alwaysOnTasks });
-    set({ alwaysOnTasks });
+  saveAlwaysOnTask: async (task) => {
+    const snapshot = await hostApiFetch<WorkbenchSnapshot>('/api/workbench/tasks', {
+      method: 'POST',
+      body: JSON.stringify(task),
+    });
+    set(applySnapshot(snapshot));
   },
 
-  saveRoutingRule: (rule) => {
-    const timestamp = now();
-    const current = get();
-    const existing = rule.id ? current.routingRules.find((candidate) => candidate.id === rule.id) : undefined;
-    const nextRule: RoutingRule = {
-      id: rule.id || crypto.randomUUID(),
-      name: rule.name?.trim() || existing?.name || '路由规则',
-      matcher: rule.matcher ?? existing?.matcher ?? '',
-      complexity: rule.complexity || existing?.complexity || 'normal',
-      preferredModelStrategy: rule.preferredModelStrategy || existing?.preferredModelStrategy || 'balanced',
-      targetAgentId: rule.targetAgentId || existing?.targetAgentId || 'main',
-      enabled: rule.enabled ?? existing?.enabled ?? true,
-      createdAt: existing?.createdAt || timestamp,
-      updatedAt: timestamp,
-    };
-    const snapshot = { ...current, routingRules: upsertById(current.routingRules, nextRule) };
-    writeSnapshot(snapshot);
-    set({ routingRules: snapshot.routingRules });
+  markAlwaysOnTaskRun: async (id, status, sessionKey) => {
+    const snapshot = await hostApiFetch<WorkbenchSnapshot>(`/api/workbench/tasks/${encodeURIComponent(id)}/mark-run`, {
+      method: 'POST',
+      body: JSON.stringify({ status, sessionKey }),
+    });
+    set(applySnapshot(snapshot));
   },
 
-  deleteRoutingRule: (id) => {
-    const current = get();
-    const routingRules = current.routingRules.filter((item) => item.id !== id);
-    writeSnapshot({ ...current, routingRules });
-    set({ routingRules });
+  deleteAlwaysOnTask: async (id) => {
+    const snapshot = await hostApiFetch<WorkbenchSnapshot>(`/api/workbench/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    set(applySnapshot(snapshot));
   },
 
-  saveReport: (report) => {
-    const timestamp = now();
-    const current = get();
-    const existing = report.id ? current.reports.find((candidate) => candidate.id === report.id) : undefined;
-    const nextReport: WorkbenchReport = {
-      id: report.id || crypto.randomUUID(),
-      projectId: report.projectId || existing?.projectId || current.projects[0]?.id || '',
-      title: report.title?.trim() || existing?.title || '运行报告',
-      summary: report.summary ?? existing?.summary ?? '',
-      status: report.status || existing?.status || 'draft',
-      createdAt: existing?.createdAt || timestamp,
-    };
-    const snapshot = { ...current, reports: upsertById(current.reports, nextReport) };
-    writeSnapshot(snapshot);
-    set({ reports: snapshot.reports });
+  saveRoutingRule: async (rule) => {
+    const snapshot = await hostApiFetch<WorkbenchSnapshot>('/api/workbench/routing-rules', {
+      method: 'POST',
+      body: JSON.stringify(rule),
+    });
+    set(applySnapshot(snapshot));
   },
 
-  deleteReport: (id) => {
-    const current = get();
-    const reports = current.reports.filter((item) => item.id !== id);
-    writeSnapshot({ ...current, reports });
-    set({ reports });
+  deleteRoutingRule: async (id) => {
+    const snapshot = await hostApiFetch<WorkbenchSnapshot>(`/api/workbench/routing-rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    set(applySnapshot(snapshot));
+  },
+
+  saveReport: async (report) => {
+    const snapshot = await hostApiFetch<WorkbenchSnapshot>('/api/workbench/reports', {
+      method: 'POST',
+      body: JSON.stringify(report),
+    });
+    set(applySnapshot(snapshot));
+  },
+
+  deleteReport: async (id) => {
+    const snapshot = await hostApiFetch<WorkbenchSnapshot>(`/api/workbench/reports/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    set(applySnapshot(snapshot));
   },
 }));

@@ -1,9 +1,9 @@
 appId: app.clawx.desktop
 productName: ClawX
 copyright: Copyright © 2026 ClawX
-# Faster install/update extraction. `maximum` saves some download size but makes
-# NSIS build/extract noticeably slower for ClawX's large OpenClaw bundle.
-compression: normal
+# Faster install/update extraction. ClawX carries a large OpenClaw bundle; NSIS
+# compression saves download size but makes update installation feel frozen.
+compression: store
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 
 directories:

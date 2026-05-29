@@ -29,6 +29,10 @@ export interface AlwaysOnTask {
   objective: string;
   status: 'active' | 'paused';
   lastRunAt?: number;
+  nextRunAt?: number;
+  runCount: number;
+  lastRunStatus?: 'queued' | 'running' | 'completed' | 'failed';
+  lastRunSessionKey?: string;
   nextRunHint?: string;
   createdAt: number;
   updatedAt: number;
@@ -52,6 +56,8 @@ export interface WorkbenchReport {
   title: string;
   summary: string;
   status: 'draft' | 'final';
+  runId?: string;
+  durationMs?: number;
   createdAt: number;
 }
 

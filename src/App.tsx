@@ -26,6 +26,7 @@ import { useSettingsStore } from './stores/settings';
 import { useUpdateStore } from './stores/update';
 import { useGatewayStore } from './stores/gateway';
 import { useProviderStore } from './stores/providers';
+import { useWorkbenchStore } from './stores/workbench';
 import { applyGatewayTransportPreference } from './lib/api-client';
 import { rendererExtensionRegistry } from './extensions/registry';
 import { loadExternalRendererExtensions } from './extensions/_ext-bridge.generated';
@@ -109,6 +110,7 @@ function App() {
   const initGateway = useGatewayStore((state) => state.init);
   const initUpdate = useUpdateStore((state) => state.init);
   const initProviders = useProviderStore((state) => state.init);
+  const initWorkbench = useWorkbenchStore((state) => state.hydrate);
 
   useEffect(() => {
     let cancelled = false;
@@ -140,6 +142,11 @@ function App() {
   useEffect(() => {
     initProviders();
   }, [initProviders]);
+
+  // Load workbench rules and memories early so chat routing/context is active immediately.
+  useEffect(() => {
+    void initWorkbench();
+  }, [initWorkbench]);
 
   // Redirect to setup wizard if not complete
   useEffect(() => {
