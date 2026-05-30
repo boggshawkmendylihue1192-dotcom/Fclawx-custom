@@ -33,6 +33,8 @@ export interface AlwaysOnTask {
   runCount: number;
   lastRunStatus?: 'queued' | 'running' | 'completed' | 'failed';
   lastRunSessionKey?: string;
+  lastRunError?: string;
+  failureCount: number;
   nextRunHint?: string;
   createdAt: number;
   updatedAt: number;
@@ -45,6 +47,7 @@ export interface RoutingRule {
   complexity: 'simple' | 'normal' | 'hard';
   preferredModelStrategy: 'fast' | 'balanced' | 'quality';
   targetAgentId: string;
+  notes?: string;
   enabled: boolean;
   createdAt: number;
   updatedAt: number;
@@ -57,6 +60,8 @@ export interface WorkbenchReport {
   summary: string;
   status: 'draft' | 'final';
   runId?: string;
+  taskId?: string;
+  agentId?: string;
   durationMs?: number;
   createdAt: number;
 }

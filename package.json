@@ -1,6 +1,6 @@
 {
     "name": "clawx",
-  "version": "0.4.33",
+  "version": "0.4.34",
     "pnpm": {
         "onlyBuiltDependencies": [
             "@discordjs/opus",
@@ -74,6 +74,7 @@
         "version:prerelease-alpha": "pnpm version prerelease --preid=alpha",
         "version:prerelease-beta": "pnpm version prerelease --preid=beta",
         "release:validate": "node scripts/assert-tag-matches-package.mjs",
+        "release:github": "node scripts/publish-github-release.mjs",
         "postversion": "node scripts/post-version-push.mjs"
     },
     "dependencies": {

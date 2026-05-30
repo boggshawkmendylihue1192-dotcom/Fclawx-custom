@@ -1,7 +1,7 @@
 import { execFile } from 'child_process';
-import { readdir, readFile, stat, writeFile } from 'fs/promises';
+import { copyFile, mkdir, readdir, readFile, stat, writeFile } from 'fs/promises';
 import type { IncomingMessage, ServerResponse } from 'http';
-import { isAbsolute, join, relative, resolve } from 'path';
+import { dirname, isAbsolute, join, relative, resolve } from 'path';
 import { promisify } from 'util';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
@@ -78,6 +78,10 @@ async function writeWorkspaceFile(workspace: string, filePath: string, content: 
   const target = resolveWorkspacePath(workspace, filePath);
   const info = await stat(target);
   if (!info.isFile()) throw new Error('Only existing files can be edited from Workbench');
+  const backupRoot = resolveWorkspacePath(workspace, '.clawx-backups');
+  const backupPath = join(backupRoot, `${filePath.replace(/[\\/:"*?<>|]+/g, '_')}.${Date.now()}.bak`);
+  await mkdir(dirname(backupPath), { recursive: true });
+  await copyFile(target, backupPath);
   await writeFile(target, content, 'utf-8');
   const next = await stat(target);
   return { path: filePath, size: next.size };
@@ -85,8 +89,47 @@ async function writeWorkspaceFile(workspace: string, filePath: string, content: 
 
 async function gitStatus(workspace: string): Promise<{ ok: boolean; output: string }> {
   try {
-    const { stdout, stderr } = await execFileAsync('git', ['-C', workspace, 'status', '--short', '--branch'], { timeout: 8000 });
+    const { stdout, stderr } = await execFileAsync('git', ['-C', workspace, 'status', '--short', '--branch'], { timeout: 8000, windowsHide: true });
     return { ok: true, output: `${stdout}${stderr}`.trim() };
+  } catch (error) {
+    return { ok: false, output: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function gitDiff(workspace: string, filePath = ''): Promise<{ ok: boolean; output: string }> {
+  try {
+    const args = ['-C', workspace, 'diff', '--'];
+    if (filePath) args.push(resolveWorkspacePath(workspace, filePath));
+    const { stdout, stderr } = await execFileAsync('git', args, { timeout: 12_000, maxBuffer: 2 * 1024 * 1024, windowsHide: true });
+    return { ok: true, output: `${stdout}${stderr}`.trim() || 'No working tree diff.' };
+  } catch (error) {
+    return { ok: false, output: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function gitLog(workspace: string): Promise<{ ok: boolean; output: string }> {
+  try {
+    const { stdout, stderr } = await execFileAsync('git', ['-C', workspace, 'log', '--oneline', '--decorate', '-n', '12'], {
+      timeout: 8000,
+      windowsHide: true,
+    });
+    return { ok: true, output: `${stdout}${stderr}`.trim() || 'No commits.' };
+  } catch (error) {
+    return { ok: false, output: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function gitCommit(workspace: string, message: string): Promise<{ ok: boolean; output: string }> {
+  const commitMessage = message.trim();
+  if (!commitMessage) return { ok: false, output: 'Commit message is required.' };
+  try {
+    const add = await execFileAsync('git', ['-C', workspace, 'add', '-A'], { timeout: 12_000, windowsHide: true });
+    const commit = await execFileAsync('git', ['-C', workspace, 'commit', '-m', commitMessage], {
+      timeout: 30_000,
+      maxBuffer: 2 * 1024 * 1024,
+      windowsHide: true,
+    });
+    return { ok: true, output: `${add.stdout}${add.stderr}${commit.stdout}${commit.stderr}`.trim() };
   } catch (error) {
     return { ok: false, output: error instanceof Error ? error.message : String(error) };
   }
@@ -127,8 +170,8 @@ export async function handleWorkbenchRoutes(
   }
   if (url.pathname.startsWith('/api/workbench/tasks/') && url.pathname.endsWith('/mark-run') && req.method === 'POST') {
     const id = decodeURIComponent(url.pathname.slice('/api/workbench/tasks/'.length, -'/mark-run'.length));
-    const body = await parseJsonBody<{ status: AlwaysOnTask['lastRunStatus']; sessionKey?: string }>(req);
-    sendJson(res, 200, { success: true, ...(await markWorkbenchTaskRun({ id, status: body.status, sessionKey: body.sessionKey })) });
+    const body = await parseJsonBody<{ status: AlwaysOnTask['lastRunStatus']; sessionKey?: string; error?: string }>(req);
+    sendJson(res, 200, { success: true, ...(await markWorkbenchTaskRun({ id, status: body.status, sessionKey: body.sessionKey, error: body.error })) });
     return true;
   }
   if (url.pathname.startsWith('/api/workbench/tasks/') && req.method === 'DELETE') {
@@ -177,6 +220,25 @@ export async function handleWorkbenchRoutes(
   if (url.pathname === '/api/workbench/git-status' && req.method === 'GET') {
     const workspace = url.searchParams.get('workspace') || '';
     sendJson(res, 200, { success: true, ...(await gitStatus(workspace)) });
+    return true;
+  }
+
+  if (url.pathname === '/api/workbench/git-diff' && req.method === 'GET') {
+    const workspace = url.searchParams.get('workspace') || '';
+    const path = url.searchParams.get('path') || '';
+    sendJson(res, 200, { success: true, ...(await gitDiff(workspace, path)) });
+    return true;
+  }
+
+  if (url.pathname === '/api/workbench/git-log' && req.method === 'GET') {
+    const workspace = url.searchParams.get('workspace') || '';
+    sendJson(res, 200, { success: true, ...(await gitLog(workspace)) });
+    return true;
+  }
+
+  if (url.pathname === '/api/workbench/git-commit' && req.method === 'POST') {
+    const body = await parseJsonBody<{ workspace: string; message: string }>(req);
+    sendJson(res, 200, { success: true, ...(await gitCommit(body.workspace, body.message)) });
     return true;
   }
 

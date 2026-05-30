@@ -39,6 +39,8 @@ export interface AlwaysOnTask {
   runCount: number;
   lastRunStatus?: 'queued' | 'running' | 'completed' | 'failed';
   lastRunSessionKey?: string;
+  lastRunError?: string;
+  failureCount: number;
   nextRunHint?: string;
   createdAt: number;
   updatedAt: number;
@@ -51,6 +53,7 @@ export interface RoutingRule {
   complexity: 'simple' | 'normal' | 'hard';
   preferredModelStrategy: 'fast' | 'balanced' | 'quality';
   targetAgentId: string;
+  notes?: string;
   enabled: boolean;
   createdAt: number;
   updatedAt: number;
@@ -63,6 +66,8 @@ export interface WorkbenchReport {
   summary: string;
   status: 'draft' | 'final';
   runId?: string;
+  taskId?: string;
+  agentId?: string;
   durationMs?: number;
   createdAt: number;
 }
@@ -143,6 +148,8 @@ function normalizeTask(input: Partial<AlwaysOnTask>): AlwaysOnTask {
     runCount: typeof input.runCount === 'number' && Number.isFinite(input.runCount) ? Math.max(0, Math.floor(input.runCount)) : 0,
     lastRunStatus: input.lastRunStatus,
     lastRunSessionKey: text(input.lastRunSessionKey) || undefined,
+    lastRunError: text(input.lastRunError) || undefined,
+    failureCount: typeof input.failureCount === 'number' && Number.isFinite(input.failureCount) ? Math.max(0, Math.floor(input.failureCount)) : 0,
     nextRunHint: typeof input.nextRunHint === 'string' ? input.nextRunHint : undefined,
     createdAt: time(input.createdAt ?? now),
     updatedAt: time(input.updatedAt ?? now),
@@ -160,6 +167,7 @@ function normalizeRule(input: Partial<RoutingRule>): RoutingRule {
       ? input.preferredModelStrategy
       : 'balanced',
     targetAgentId: text(input.targetAgentId, 'main'),
+    notes: text(input.notes) || undefined,
     enabled: input.enabled !== false,
     createdAt: time(input.createdAt ?? now),
     updatedAt: time(input.updatedAt ?? now),
@@ -174,6 +182,8 @@ function normalizeReport(input: Partial<WorkbenchReport>): WorkbenchReport {
     summary: typeof input.summary === 'string' ? input.summary : '',
     status: input.status === 'final' ? 'final' : 'draft',
     runId: text(input.runId) || undefined,
+    taskId: text(input.taskId) || undefined,
+    agentId: text(input.agentId) || undefined,
     durationMs: typeof input.durationMs === 'number' ? input.durationMs : undefined,
     createdAt: time(input.createdAt),
   };
@@ -284,19 +294,23 @@ export async function deleteWorkbenchTask(id: string): Promise<WorkbenchSnapshot
   });
 }
 
-export async function markWorkbenchTaskRun(input: { id: string; status: AlwaysOnTask['lastRunStatus']; sessionKey?: string }): Promise<WorkbenchSnapshot> {
+export async function markWorkbenchTaskRun(input: { id: string; status: AlwaysOnTask['lastRunStatus']; sessionKey?: string; error?: string }): Promise<WorkbenchSnapshot> {
   return withConfigLock(async () => {
     const snapshot = await readSnapshotFile();
     const task = snapshot.alwaysOnTasks.find((item) => item.id === input.id);
     if (!task) return snapshot;
     const now = Date.now();
+    const isFirstStateForRun = input.status === 'running' && task.lastRunStatus !== 'queued' && task.lastRunStatus !== 'running';
+    const isTerminalFailure = input.status === 'failed';
     const nextTask = normalizeTask({
       ...task,
       lastRunAt: now,
       nextRunAt: computeNextRunAt(task.cadence, now),
-      runCount: task.runCount + 1,
+      runCount: isFirstStateForRun ? task.runCount + 1 : task.runCount,
       lastRunStatus: input.status,
       lastRunSessionKey: input.sessionKey ?? task.lastRunSessionKey,
+      lastRunError: input.status === 'failed' ? input.error || task.lastRunError : undefined,
+      failureCount: isTerminalFailure ? task.failureCount + 1 : task.failureCount,
       updatedAt: now,
     });
     const next = { ...snapshot, alwaysOnTasks: upsert(snapshot.alwaysOnTasks, nextTask) };

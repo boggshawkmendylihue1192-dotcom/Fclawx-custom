@@ -1,19 +1,24 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Archive,
   Bot,
   Brain,
   Code2,
+  FileText,
   FolderOpen,
+  GitBranch,
+  GitCommit,
   History,
   Layers,
   MemoryStick,
+  Pause,
   Package,
   Play,
   Plus,
   RefreshCw,
   Route,
+  Save,
   ShieldCheck,
   Trash2,
 } from 'lucide-react';
@@ -31,6 +36,9 @@ import { hostApiFetch } from '@/lib/host-api';
 import { cn } from '@/lib/utils';
 import type { AgentSummary } from '@/types/agent';
 import type { WorkbenchProject } from '@/types/workbench';
+
+const MonacoViewerLazy = lazy(() => import('@/components/file-preview/MonacoViewer'));
+const MonacoDiffViewerLazy = lazy(() => import('@/components/file-preview/MonacoDiffViewer'));
 
 interface WorkspaceEntry {
   path: string;
@@ -94,8 +102,13 @@ export function Workbench() {
   const [workspaceEntries, setWorkspaceEntries] = useState<WorkspaceEntry[]>([]);
   const [selectedFilePath, setSelectedFilePath] = useState('');
   const [selectedFileContent, setSelectedFileContent] = useState('');
+  const [originalFileContent, setOriginalFileContent] = useState('');
+  const [showFileDiff, setShowFileDiff] = useState(false);
   const [gitStatus, setGitStatus] = useState('');
+  const [gitDiff, setGitDiff] = useState('');
+  const [gitLog, setGitLog] = useState('');
   const selectedProject = projects.find((project) => project.id === selectedProjectId) || projects[0] || null;
+  const fileDirty = selectedFilePath !== '' && selectedFileContent !== originalFileContent;
 
   useEffect(() => {
     void hydrate();
@@ -127,22 +140,32 @@ export function Workbench() {
   const refreshWorkspaceTools = async () => {
     if (!selectedProject?.workspace) return;
     try {
-      const [tree, git] = await Promise.all([
+      const [tree, git, diff, log] = await Promise.all([
         hostApiFetch<{ entries?: WorkspaceEntry[] }>(`/api/workbench/files?workspace=${encodeURIComponent(selectedProject.workspace)}`),
         hostApiFetch<{ output?: string }>(`/api/workbench/git-status?workspace=${encodeURIComponent(selectedProject.workspace)}`),
+        hostApiFetch<{ output?: string }>(`/api/workbench/git-diff?workspace=${encodeURIComponent(selectedProject.workspace)}`),
+        hostApiFetch<{ output?: string }>(`/api/workbench/git-log?workspace=${encodeURIComponent(selectedProject.workspace)}`),
       ]);
       setWorkspaceEntries(tree.entries ?? []);
       setGitStatus(git.output || '没有 Git 输出。');
+      setGitDiff(diff.output || '没有工作区 diff。');
+      setGitLog(log.output || '没有 Git 历史。');
     } catch (error) {
       setGitStatus(String(error));
+      setGitDiff('');
+      setGitLog('');
     }
   };
 
   useEffect(() => {
     setSelectedFilePath('');
     setSelectedFileContent('');
+    setOriginalFileContent('');
+    setShowFileDiff(false);
     setWorkspaceEntries([]);
     setGitStatus('');
+    setGitDiff('');
+    setGitLog('');
     void refreshWorkspaceTools();
   }, [selectedProject?.id, selectedProject?.workspace]);
 
@@ -174,6 +197,8 @@ export function Workbench() {
       );
       setSelectedFilePath(path);
       setSelectedFileContent(result.content ?? '');
+      setOriginalFileContent(result.content ?? '');
+      setShowFileDiff(false);
     } catch (error) {
       toast.error(String(error));
     }
@@ -191,6 +216,40 @@ export function Workbench() {
         }),
       });
       toast.success('文件已保存');
+      setOriginalFileContent(selectedFileContent);
+      setShowFileDiff(false);
+      await refreshWorkspaceTools();
+    } catch (error) {
+      toast.error(String(error));
+    }
+  };
+
+  const refreshSelectedFileDiff = async () => {
+    if (!selectedProject?.workspace || !selectedFilePath) return;
+    try {
+      const result = await hostApiFetch<{ output?: string }>(
+        `/api/workbench/git-diff?workspace=${encodeURIComponent(selectedProject.workspace)}&path=${encodeURIComponent(selectedFilePath)}`,
+      );
+      setGitDiff(result.output || '当前文件没有 diff。');
+    } catch (error) {
+      setGitDiff(String(error));
+    }
+  };
+
+  const commitWorkspace = async () => {
+    if (!selectedProject?.workspace) return;
+    const message = window.prompt('提交说明');
+    if (!message) return;
+    try {
+      const result = await hostApiFetch<{ ok?: boolean; output?: string }>('/api/workbench/git-commit', {
+        method: 'POST',
+        body: JSON.stringify({ workspace: selectedProject.workspace, message }),
+      });
+      if (result.ok) {
+        toast.success('Git 提交已完成');
+      } else {
+        toast.error(result.output || 'Git 提交失败');
+      }
       await refreshWorkspaceTools();
     } catch (error) {
       toast.error(String(error));
@@ -218,13 +277,17 @@ export function Workbench() {
     const title = window.prompt('后台任务名称');
     if (!title) return;
     const objective = window.prompt('任务目标');
+    const cadenceInput = window.prompt('执行频率：manual / hourly / daily / weekly', 'daily');
+    const cadence = cadenceInput === 'manual' || cadenceInput === 'hourly' || cadenceInput === 'weekly'
+      ? cadenceInput
+      : 'daily';
     void saveAlwaysOnTask({
       projectId: selectedProject.id,
       title,
       objective: objective || '',
-      cadence: 'daily',
+      cadence,
       status: 'active',
-      nextRunHint: '可从工作流或定时任务继续接入自动执行。',
+      nextRunHint: cadence === 'manual' ? '手动运行。' : `按 ${cadence} 自动检查。`,
     });
     toast.success('后台任务已保存');
   };
@@ -233,12 +296,16 @@ export function Workbench() {
     const name = window.prompt('路由规则名称');
     if (!name) return;
     const matcher = window.prompt('匹配关键词，例如：搜索,代码,总结');
+    const strategyInput = window.prompt('模型策略：fast / balanced / quality', 'balanced');
+    const preferredModelStrategy = strategyInput === 'fast' || strategyInput === 'quality' ? strategyInput : 'balanced';
+    const notes = window.prompt('路由说明，可留空');
     void saveRoutingRule({
       name,
       matcher: matcher || '',
       complexity: 'normal',
-      preferredModelStrategy: 'balanced',
+      preferredModelStrategy,
       targetAgentId: selectedProject?.agentId || agents[0]?.id || 'main',
+      notes: notes || undefined,
       enabled: true,
     });
     toast.success('路由规则已保存');
@@ -279,12 +346,28 @@ export function Workbench() {
       await saveReport({
         projectId: project.id,
         title: `${title} 运行报告`,
-        summary: `Always-on 后台任务已提交给 ${agentName(agents, project.agentId)}。\n工作区：${project.workspace || '未配置'}`,
+        summary: [
+          `Always-on 后台任务已提交给 ${agentName(agents, project.agentId)}。`,
+          `工作区：${project.workspace || '未配置'}`,
+          `任务：${objective || '未填写目标'}`,
+        ].join('\n'),
         status: 'final',
+        taskId,
+        agentId: project.agentId,
         durationMs: Date.now() - startedAt,
       });
     } catch (error) {
-      if (taskId) await markAlwaysOnTaskRun(taskId, 'failed', project.agentId);
+      const message = String(error);
+      if (taskId) await markAlwaysOnTaskRun(taskId, 'failed', project.agentId, message);
+      await saveReport({
+        projectId: project.id,
+        title: `${title} 失败报告`,
+        summary: `Always-on 后台任务执行失败。\n错误：${message}`,
+        status: 'draft',
+        taskId,
+        agentId: project.agentId,
+        durationMs: Date.now() - startedAt,
+      });
       toast.error(String(error));
     }
   };
@@ -395,6 +478,15 @@ export function Workbench() {
                     <div className="flex items-center justify-between gap-2">
                       <p className="truncate text-sm font-semibold text-foreground">{task.title}</p>
                       <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => void saveAlwaysOnTask({ ...task, status: task.status === 'active' ? 'paused' : 'active' })}
+                          className="h-7 w-7"
+                          title={task.status === 'active' ? '暂停' : '启用'}
+                        >
+                          {task.status === 'active' ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                        </Button>
                         <Button variant="ghost" size="icon" onClick={() => void runAlwaysOnTask(task.title, task.objective, selectedProject, task.id)} className="h-7 w-7">
                           <Play className="h-3.5 w-3.5" />
                         </Button>
@@ -404,6 +496,10 @@ export function Workbench() {
                       </div>
                     </div>
                     <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{task.objective || task.nextRunHint}</p>
+                    <p className="mt-2 text-2xs text-muted-foreground">
+                      {task.cadence} · {task.status} · 次数 {task.runCount} · 下次 {formatTime(task.nextRunAt)} · {task.lastRunStatus || '未运行'}
+                    </p>
+                    {task.lastRunError && <p className="mt-1 line-clamp-2 text-2xs text-destructive">{task.lastRunError}</p>}
                   </div>
                 ))}
                 {projectTasks.length === 0 && <EmptyText text="暂无后台任务。可用于长期监控、定期总结、自动推进项目。" />}
@@ -411,14 +507,14 @@ export function Workbench() {
 
               <CapabilityCard title="智能模型路由" icon={<Route className="h-5 w-5" />} actionLabel="新增规则" onAction={createRoutingRule}>
                 {routingRules.slice(0, 5).map((rule) => (
-                  <Row key={rule.id} title={rule.name} detail={`${rule.matcher || '全部'} · ${rule.complexity} · ${rule.preferredModelStrategy} · ${agentName(agents, rule.targetAgentId)}`} onDelete={() => void deleteRoutingRule(rule.id)} />
+                  <Row key={rule.id} title={rule.name} detail={`${rule.matcher || '全部'} · ${rule.complexity} · ${rule.preferredModelStrategy} · ${agentName(agents, rule.targetAgentId)}${rule.notes ? ` · ${rule.notes}` : ''}`} onDelete={() => void deleteRoutingRule(rule.id)} />
                 ))}
                 {routingRules.length === 0 && <EmptyText text="暂无路由规则。可以按关键词、复杂度和模型策略把任务分发给不同智能体。" />}
               </CapabilityCard>
 
               <CapabilityCard title="任务历史 / 运行报告" icon={<History className="h-5 w-5" />} actionLabel="生成报告" onAction={createReportFromLatestRun}>
                 {projectReports.slice(0, 3).map((report) => (
-                  <Row key={report.id} title={report.title} detail={`${report.status} · ${formatTime(report.createdAt)}`} onDelete={() => void deleteReport(report.id)} />
+                  <Row key={report.id} title={report.title} detail={`${report.status} · ${report.agentId || 'agent'} · ${report.durationMs ? `${Math.round(report.durationMs / 1000)}s` : '未计时'} · ${formatTime(report.createdAt)}`} onDelete={() => void deleteReport(report.id)} />
                 ))}
                 {runs.slice(0, 3).map((run) => (
                   <div key={run.id} className="rounded-xl bg-black/5 p-3 text-sm dark:bg-white/5">
@@ -439,13 +535,19 @@ export function Workbench() {
               <Card className="rounded-2xl border-black/10 bg-transparent dark:border-white/10">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0">
                   <CardTitle className="flex items-center gap-2 text-lg">
-                    <Code2 className="h-5 w-5" />
+                    <GitBranch className="h-5 w-5" />
                     文件树 / Git
                   </CardTitle>
-                  <Button variant="outline" onClick={() => void refreshWorkspaceTools()} className="h-8 rounded-full px-3 text-xs">
-                    <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-                    刷新
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" onClick={() => void commitWorkspace()} className="h-8 rounded-full px-3 text-xs">
+                      <GitCommit className="mr-1.5 h-3.5 w-3.5" />
+                      提交
+                    </Button>
+                    <Button variant="outline" onClick={() => void refreshWorkspaceTools()} className="h-8 rounded-full px-3 text-xs">
+                      <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                      刷新
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent className="grid gap-3">
                   <div className="max-h-64 overflow-y-auto rounded-xl bg-black/5 p-2 text-sm dark:bg-white/5">
@@ -461,32 +563,60 @@ export function Workbench() {
                           selectedFilePath === entry.path && 'bg-primary/10 text-foreground',
                         )}
                       >
-                        <span className="w-4 shrink-0">{entry.type === 'dir' ? 'dir' : 'file'}</span>
+                        <span className="w-7 shrink-0 text-2xs">{entry.type === 'dir' ? 'dir' : 'file'}</span>
                         <span className="truncate">{entry.path}</span>
                       </button>
                     ))}
                     {workspaceEntries.length === 0 && <EmptyText text="未读取到文件。请确认工作区路径存在。" />}
                   </div>
-                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-xl bg-black/5 p-3 text-xs text-muted-foreground dark:bg-white/5">{gitStatus || '暂无 Git 状态。'}</pre>
+                  <div className="grid gap-2">
+                    <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-xl bg-black/5 p-3 text-xs text-muted-foreground dark:bg-white/5">{gitStatus || '暂无 Git 状态。'}</pre>
+                    <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-xl bg-black/5 p-3 text-xs text-muted-foreground dark:bg-white/5">{gitLog || '暂无 Git 历史。'}</pre>
+                    <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-xl bg-black/5 p-3 text-xs text-muted-foreground dark:bg-white/5">{gitDiff || '暂无 Git diff。'}</pre>
+                  </div>
                 </CardContent>
               </Card>
 
               <Card className="rounded-2xl border-black/10 bg-transparent dark:border-white/10">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0">
-                  <CardTitle className="truncate text-lg">{selectedFilePath || '代码编辑器'}</CardTitle>
-                  <Button variant="outline" disabled={!selectedFilePath} onClick={() => void saveWorkspaceFile()} className="h-8 rounded-full px-3 text-xs">
-                    保存
-                  </Button>
+                  <CardTitle className="flex min-w-0 items-center gap-2 truncate text-lg">
+                    <FileText className="h-5 w-5 shrink-0" />
+                    <span className="truncate">{selectedFilePath || '代码编辑器'}</span>
+                    {fileDirty && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-2xs text-amber-600 dark:text-amber-300">未保存</span>}
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" disabled={!selectedFilePath} onClick={() => { setShowFileDiff((value) => !value); void refreshSelectedFileDiff(); }} className="h-8 rounded-full px-3 text-xs">
+                      <Code2 className="mr-1.5 h-3.5 w-3.5" />
+                      Diff
+                    </Button>
+                    <Button variant="outline" disabled={!selectedFilePath || !fileDirty} onClick={() => void saveWorkspaceFile()} className="h-8 rounded-full px-3 text-xs">
+                      <Save className="mr-1.5 h-3.5 w-3.5" />
+                      保存
+                    </Button>
+                  </div>
                 </CardHeader>
-                <CardContent>
-                  <textarea
-                    value={selectedFileContent}
-                    onChange={(event) => setSelectedFileContent(event.target.value)}
-                    disabled={!selectedFilePath}
-                    spellCheck={false}
-                    className="min-h-[320px] w-full resize-y rounded-xl border border-black/10 bg-black/5 p-3 font-mono text-xs text-foreground outline-none focus:border-primary/60 dark:border-white/10 dark:bg-white/5"
-                    placeholder="从左侧选择一个文本文件进行查看和编辑。"
-                  />
+                <CardContent className="min-h-[420px]">
+                  {selectedFilePath ? (
+                    <Suspense fallback={<div className="flex h-[420px] items-center justify-center text-sm text-muted-foreground">正在加载编辑器...</div>}>
+                      {showFileDiff ? (
+                        <MonacoDiffViewerLazy
+                          filePath={selectedFilePath}
+                          original={originalFileContent}
+                          modified={selectedFileContent}
+                          className="h-[420px] rounded-xl border border-black/10 dark:border-white/10"
+                        />
+                      ) : (
+                        <MonacoViewerLazy
+                          filePath={selectedFilePath}
+                          value={selectedFileContent}
+                          onChange={setSelectedFileContent}
+                          className="h-[420px] rounded-xl border border-black/10 dark:border-white/10"
+                        />
+                      )}
+                    </Suspense>
+                  ) : (
+                    <EmptyText text="从左侧选择一个文本文件进行查看、编辑或 diff。" />
+                  )}
                 </CardContent>
               </Card>
             </div>

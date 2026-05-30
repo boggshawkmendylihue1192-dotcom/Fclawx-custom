@@ -21,7 +21,7 @@ interface WorkbenchState extends WorkbenchSnapshot {
   saveMemory: (memory: Partial<WorkbenchMemory>) => Promise<void>;
   deleteMemory: (id: string) => Promise<void>;
   saveAlwaysOnTask: (task: Partial<AlwaysOnTask>) => Promise<void>;
-  markAlwaysOnTaskRun: (id: string, status: AlwaysOnTask['lastRunStatus'], sessionKey?: string) => Promise<void>;
+  markAlwaysOnTaskRun: (id: string, status: AlwaysOnTask['lastRunStatus'], sessionKey?: string, error?: string) => Promise<void>;
   deleteAlwaysOnTask: (id: string) => Promise<void>;
   saveRoutingRule: (rule: Partial<RoutingRule>) => Promise<void>;
   deleteRoutingRule: (id: string) => Promise<void>;
@@ -106,12 +106,16 @@ export function buildWorkbenchRuntimeContext(message: string, requestedAgentId?:
 } {
   const state = useWorkbenchStore.getState();
   const lowerMessage = message.toLowerCase();
-  const route = state.routingRules.find((rule) => {
+  const matchingRoutes = state.routingRules.filter((rule) => {
     if (!rule.enabled) return false;
     const matcher = rule.matcher.trim().toLowerCase();
-    if (!matcher) return false;
+    if (!matcher) return true;
     return matcher.split(/[,，\s]+/).filter(Boolean).some((keyword) => lowerMessage.includes(keyword));
   });
+  const route = matchingRoutes.sort((a, b) => {
+    const complexityScore = { simple: 1, normal: 2, hard: 3 } as const;
+    return complexityScore[b.complexity] - complexityScore[a.complexity];
+  })[0];
   const targetAgentId = requestedAgentId || route?.targetAgentId || null;
   const project = state.projects.find((item) => {
     if (item.status !== 'active') return false;
@@ -128,6 +132,8 @@ export function buildWorkbenchRuntimeContext(message: string, requestedAgentId?:
     project ? `工作台项目：${project.name}` : '',
     project?.workspace ? `工作区路径：${project.workspace}` : '',
     route ? `智能路由：${route.name} / ${route.preferredModelStrategy} / ${route.complexity}` : '',
+    route?.notes ? `路由说明：${route.notes}` : '',
+    route ? `模型策略：${route.preferredModelStrategy === 'fast' ? '优先快速响应' : route.preferredModelStrategy === 'quality' ? '优先高质量推理' : '速度与质量均衡'}` : '',
     memories.length > 0 ? '白盒记忆：' : '',
     ...memories.map((memory) => `- ${memory.title}: ${memory.content}`),
   ].filter(Boolean);
@@ -201,10 +207,10 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     set(applySnapshot(snapshot));
   },
 
-  markAlwaysOnTaskRun: async (id, status, sessionKey) => {
+  markAlwaysOnTaskRun: async (id, status, sessionKey, error) => {
     const snapshot = await hostApiFetch<WorkbenchSnapshot>(`/api/workbench/tasks/${encodeURIComponent(id)}/mark-run`, {
       method: 'POST',
-      body: JSON.stringify({ status, sessionKey }),
+      body: JSON.stringify({ status, sessionKey, error }),
     });
     set(applySnapshot(snapshot));
   },
