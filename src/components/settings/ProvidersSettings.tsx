@@ -593,12 +593,24 @@ function ProviderCard({
       const storedKey = await useProviderStore.getState().getAccountApiKey(account.id);
       const probeKey = normalizeProviderApiKeyInput(storedKey || newKey)
         || resolveProviderApiKeyForSave(account.vendorId, '');
+      if (!probeKey && account.authMode === 'oauth_browser') {
+        const syncResult = await useProviderStore.getState().syncAccountRuntime(account.id);
+        setHealthResult({
+          ok: true,
+          durationMs: Date.now() - startedAt,
+          checkedAt: Date.now(),
+          message: syncResult.hasKey
+            ? `OAuth 已配置，运行时已同步。检测到兼容密钥：****${syncResult.keyTail || ''}`
+            : 'OAuth 已配置，运行时已同步。浏览器 OAuth 不需要单独保存 API Key。',
+        });
+        return;
+      }
       if (!probeKey && account.authMode !== 'local') {
         setHealthResult({
           ok: false,
           durationMs: Date.now() - startedAt,
           checkedAt: Date.now(),
-          message: '未找到可用于检测的 API Key。请先保存密钥或完成 OAuth 登录。',
+          message: '未找到可用于检测的 API Key。请先保存密钥。',
         });
         return;
       }
