@@ -27,6 +27,7 @@ import {
   Moon,
   ChevronRight,
   Layers,
+  BookOpen,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { rendererExtensionRegistry } from '@/extensions/registry';
@@ -318,6 +319,13 @@ export function Sidebar() {
       label: '工作台',
       testId: 'sidebar-nav-workbench',
       onClick: () => navigate('/workbench'),
+    },
+    {
+      to: '/knowledge',
+      icon: <BookOpen className="h-4 w-4" strokeWidth={2} />,
+      label: '知识库',
+      testId: 'sidebar-nav-knowledge',
+      onClick: () => navigate('/knowledge'),
     },
     ...(devModeUnlocked
       ? [

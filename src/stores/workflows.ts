@@ -1,25 +1,33 @@
 import { create } from 'zustand';
 import { hostApiFetch } from '@/lib/host-api';
-import type { WorkflowDefinition, WorkflowRunRecord, WorkflowsSnapshot } from '@/types/workflow';
+import type { WorkflowDefinition, WorkflowRoleTemplate, WorkflowRunRecord, WorkflowsSnapshot } from '@/types/workflow';
 
 interface WorkflowsState {
   workflows: WorkflowDefinition[];
+  roleTemplates: WorkflowRoleTemplate[];
   runs: WorkflowRunRecord[];
   loading: boolean;
   error: string | null;
   fetchWorkflows: () => Promise<void>;
   saveWorkflow: (workflow: Partial<WorkflowDefinition>) => Promise<void>;
   deleteWorkflow: (id: string) => Promise<void>;
+  saveRoleTemplate: (role: Partial<WorkflowRoleTemplate>) => Promise<void>;
+  deleteRoleTemplate: (id: string) => Promise<void>;
   saveRun: (run: Partial<WorkflowRunRecord>) => Promise<void>;
   deleteRun: (id: string) => Promise<void>;
 }
 
 function applySnapshot(snapshot: WorkflowsSnapshot | undefined) {
-  return { workflows: snapshot?.workflows ?? [], runs: snapshot?.runs ?? [] };
+  return {
+    workflows: snapshot?.workflows ?? [],
+    roleTemplates: snapshot?.roleTemplates ?? [],
+    runs: snapshot?.runs ?? [],
+  };
 }
 
 export const useWorkflowsStore = create<WorkflowsState>((set) => ({
   workflows: [],
+  roleTemplates: [],
   runs: [],
   loading: false,
   error: null,
@@ -55,6 +63,33 @@ export const useWorkflowsStore = create<WorkflowsState>((set) => ({
         method: 'DELETE',
       });
       set(applySnapshot(snapshot));
+    } catch (error) {
+      set({ error: String(error) });
+      throw error;
+    }
+  },
+
+  saveRoleTemplate: async (role) => {
+    set({ error: null });
+    try {
+      const snapshot = await hostApiFetch<{ success?: boolean; roleTemplates?: WorkflowRoleTemplate[] }>('/api/workflows/roles', {
+        method: 'POST',
+        body: JSON.stringify(role),
+      });
+      set({ roleTemplates: snapshot.roleTemplates ?? [] });
+    } catch (error) {
+      set({ error: String(error) });
+      throw error;
+    }
+  },
+
+  deleteRoleTemplate: async (id) => {
+    set({ error: null });
+    try {
+      const snapshot = await hostApiFetch<{ success?: boolean; roleTemplates?: WorkflowRoleTemplate[] }>(`/api/workflows/roles/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      });
+      set({ roleTemplates: snapshot.roleTemplates ?? [] });
     } catch (error) {
       set({ error: String(error) });
       throw error;

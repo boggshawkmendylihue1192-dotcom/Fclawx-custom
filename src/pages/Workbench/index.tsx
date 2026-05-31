@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Archive,
@@ -35,7 +35,7 @@ import { invokeIpc } from '@/lib/api-client';
 import { hostApiFetch } from '@/lib/host-api';
 import { cn } from '@/lib/utils';
 import type { AgentSummary } from '@/types/agent';
-import type { WorkbenchProject } from '@/types/workbench';
+import type { AlwaysOnTask, RoutingRule, WorkbenchProject } from '@/types/workbench';
 
 const MonacoViewerLazy = lazy(() => import('@/components/file-preview/MonacoViewer'));
 const MonacoDiffViewerLazy = lazy(() => import('@/components/file-preview/MonacoDiffViewer'));
@@ -46,6 +46,8 @@ interface WorkspaceEntry {
   type: 'file' | 'dir';
   size?: number;
 }
+
+type WorkbenchModal = 'memory' | 'task' | 'route' | 'report' | null;
 
 const inputClasses = 'h-[42px] rounded-xl text-sm bg-transparent border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:border-blue-500 shadow-sm transition-all text-foreground placeholder:text-foreground/40';
 const selectClasses = 'h-[42px] w-full rounded-xl text-sm bg-transparent border border-black/10 dark:border-white/10 px-3 text-foreground';
@@ -107,7 +109,20 @@ export function Workbench() {
   const [gitStatus, setGitStatus] = useState('');
   const [gitDiff, setGitDiff] = useState('');
   const [gitLog, setGitLog] = useState('');
-  const selectedProject = projects.find((project) => project.id === selectedProjectId) || projects[0] || null;
+  const [activeModal, setActiveModal] = useState<WorkbenchModal>(null);
+  const [memoryDraft, setMemoryDraft] = useState({ title: '', content: '', confidence: 'medium' as const });
+  const [taskDraft, setTaskDraft] = useState({ title: '', objective: '', cadence: 'daily' as AlwaysOnTask['cadence'] });
+  const [routeDraft, setRouteDraft] = useState({
+    name: '',
+    matcher: '',
+    preferredModelStrategy: 'balanced' as RoutingRule['preferredModelStrategy'],
+    targetAgentId: '',
+    notes: '',
+  });
+  const [reportDraft, setReportDraft] = useState({ title: '', summary: '' });
+  const effectiveSelectedProjectId = selectedProjectId || projects[0]?.id || '';
+  const selectedProject = projects.find((project) => project.id === effectiveSelectedProjectId) || projects[0] || null;
+  const selectedWorkspace = selectedProject?.workspace;
   const fileDirty = selectedFilePath !== '' && selectedFileContent !== originalFileContent;
 
   useEffect(() => {
@@ -119,10 +134,6 @@ export function Workbench() {
     if (!hydrated || projects.length > 0 || agents.length === 0) return;
     agents.forEach((agent) => void saveProject(seedProjectFromAgent(agent)));
   }, [agents, hydrated, projects.length, saveProject]);
-
-  useEffect(() => {
-    if (!selectedProjectId && projects[0]) setSelectedProjectId(projects[0].id);
-  }, [projects, selectedProjectId]);
 
   const projectMemories = useMemo(
     () => memories.filter((memory) => !selectedProject || memory.projectId === selectedProject.id),
@@ -137,14 +148,14 @@ export function Workbench() {
     [reports, selectedProject],
   );
 
-  const refreshWorkspaceTools = async () => {
-    if (!selectedProject?.workspace) return;
+  const refreshWorkspaceTools = useCallback(async () => {
+    if (!selectedWorkspace) return;
     try {
       const [tree, git, diff, log] = await Promise.all([
-        hostApiFetch<{ entries?: WorkspaceEntry[] }>(`/api/workbench/files?workspace=${encodeURIComponent(selectedProject.workspace)}`),
-        hostApiFetch<{ output?: string }>(`/api/workbench/git-status?workspace=${encodeURIComponent(selectedProject.workspace)}`),
-        hostApiFetch<{ output?: string }>(`/api/workbench/git-diff?workspace=${encodeURIComponent(selectedProject.workspace)}`),
-        hostApiFetch<{ output?: string }>(`/api/workbench/git-log?workspace=${encodeURIComponent(selectedProject.workspace)}`),
+        hostApiFetch<{ entries?: WorkspaceEntry[] }>(`/api/workbench/files?workspace=${encodeURIComponent(selectedWorkspace)}`),
+        hostApiFetch<{ output?: string }>(`/api/workbench/git-status?workspace=${encodeURIComponent(selectedWorkspace)}`),
+        hostApiFetch<{ output?: string }>(`/api/workbench/git-diff?workspace=${encodeURIComponent(selectedWorkspace)}`),
+        hostApiFetch<{ output?: string }>(`/api/workbench/git-log?workspace=${encodeURIComponent(selectedWorkspace)}`),
       ]);
       setWorkspaceEntries(tree.entries ?? []);
       setGitStatus(git.output || '没有 Git 输出。');
@@ -155,39 +166,26 @@ export function Workbench() {
       setGitDiff('');
       setGitLog('');
     }
-  };
+  }, [selectedWorkspace]);
 
   useEffect(() => {
-    setSelectedFilePath('');
-    setSelectedFileContent('');
-    setOriginalFileContent('');
-    setShowFileDiff(false);
-    setWorkspaceEntries([]);
-    setGitStatus('');
-    setGitDiff('');
-    setGitLog('');
-    void refreshWorkspaceTools();
-  }, [selectedProject?.id, selectedProject?.workspace]);
-
-  useEffect(() => {
-    if (!hydrated) return;
-    const tick = () => {
-      const now = Date.now();
-      const due = alwaysOnTasks.find((task) => (
-        task.status === 'active'
-        && task.cadence !== 'manual'
-        && typeof task.nextRunAt === 'number'
-        && task.nextRunAt <= now
-      ));
-      if (!due) return;
-      const project = projects.find((item) => item.id === due.projectId);
-      if (!project) return;
-      void runAlwaysOnTask(due.title, due.objective, project, due.id);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setSelectedFilePath('');
+      setSelectedFileContent('');
+      setOriginalFileContent('');
+      setShowFileDiff(false);
+      setWorkspaceEntries([]);
+      setGitStatus('');
+      setGitDiff('');
+      setGitLog('');
+      void refreshWorkspaceTools();
+    });
+    return () => {
+      cancelled = true;
     };
-    const timer = window.setInterval(tick, 60_000);
-    tick();
-    return () => window.clearInterval(timer);
-  }, [alwaysOnTasks, hydrated, projects]);
+  }, [refreshWorkspaceTools, selectedProject?.id, selectedWorkspace]);
 
   const openWorkspaceFile = async (path: string) => {
     if (!selectedProject?.workspace) return;
@@ -257,75 +255,126 @@ export function Workbench() {
   };
 
   const createMemory = () => {
-    if (!selectedProject) return;
-    const title = window.prompt('记忆标题');
-    if (!title) return;
-    const content = window.prompt('记忆内容');
-    void saveMemory({
-      projectId: selectedProject.id,
-      title,
-      content: content || '',
-      source: 'manual',
-      confidence: 'medium',
-      status: 'active',
-    });
-    toast.success('记忆已保存');
+    if (!selectedProject) {
+      toast.error('请先选择或创建工作区');
+      return;
+    }
+    setMemoryDraft({ title: '', content: '', confidence: 'medium' });
+    setActiveModal('memory');
   };
 
   const createAlwaysOnTask = () => {
-    if (!selectedProject) return;
-    const title = window.prompt('后台任务名称');
-    if (!title) return;
-    const objective = window.prompt('任务目标');
-    const cadenceInput = window.prompt('执行频率：manual / hourly / daily / weekly', 'daily');
-    const cadence = cadenceInput === 'manual' || cadenceInput === 'hourly' || cadenceInput === 'weekly'
-      ? cadenceInput
-      : 'daily';
-    void saveAlwaysOnTask({
-      projectId: selectedProject.id,
-      title,
-      objective: objective || '',
-      cadence,
-      status: 'active',
-      nextRunHint: cadence === 'manual' ? '手动运行。' : `按 ${cadence} 自动检查。`,
-    });
-    toast.success('后台任务已保存');
+    if (!selectedProject) {
+      toast.error('请先选择或创建工作区');
+      return;
+    }
+    setTaskDraft({ title: '', objective: '', cadence: 'daily' });
+    setActiveModal('task');
   };
 
   const createRoutingRule = () => {
-    const name = window.prompt('路由规则名称');
-    if (!name) return;
-    const matcher = window.prompt('匹配关键词，例如：搜索,代码,总结');
-    const strategyInput = window.prompt('模型策略：fast / balanced / quality', 'balanced');
-    const preferredModelStrategy = strategyInput === 'fast' || strategyInput === 'quality' ? strategyInput : 'balanced';
-    const notes = window.prompt('路由说明，可留空');
-    void saveRoutingRule({
-      name,
-      matcher: matcher || '',
-      complexity: 'normal',
-      preferredModelStrategy,
+    setRouteDraft({
+      name: '',
+      matcher: '',
+      preferredModelStrategy: 'balanced',
       targetAgentId: selectedProject?.agentId || agents[0]?.id || 'main',
-      notes: notes || undefined,
-      enabled: true,
+      notes: '',
     });
-    toast.success('路由规则已保存');
+    setActiveModal('route');
   };
 
   const createReportFromLatestRun = () => {
-    if (!selectedProject) return;
+    if (!selectedProject) {
+      toast.error('请先选择或创建工作区');
+      return;
+    }
     const latest = runs[0];
-    void saveReport({
-      projectId: selectedProject.id,
+    setReportDraft({
       title: latest ? `${latest.workflowName} 运行报告` : '手动运行报告',
       summary: latest
         ? `状态：${latest.status}\n步骤：${latest.stepCount}\n智能体：${latest.agentIds.join(', ')}\n会话：${latest.sessionKey || '无'}`
         : '暂无工作流记录，可手动补充本次任务的结论、文件和风险。',
+    });
+    setActiveModal('report');
+  };
+
+  const closeModal = () => setActiveModal(null);
+
+  const submitMemory = async () => {
+    if (!selectedProject) return;
+    const title = memoryDraft.title.trim();
+    if (!title) {
+      toast.error('请填写记忆标题');
+      return;
+    }
+    await saveMemory({
+      projectId: selectedProject.id,
+      title,
+      content: memoryDraft.content.trim(),
+      source: 'manual',
+      confidence: memoryDraft.confidence,
+      status: 'active',
+    });
+    toast.success('记忆已保存');
+    closeModal();
+  };
+
+  const submitTask = async () => {
+    if (!selectedProject) return;
+    const title = taskDraft.title.trim();
+    if (!title) {
+      toast.error('请填写任务名称');
+      return;
+    }
+    await saveAlwaysOnTask({
+      projectId: selectedProject.id,
+      title,
+      objective: taskDraft.objective.trim(),
+      cadence: taskDraft.cadence,
+      status: 'active',
+      nextRunHint: taskDraft.cadence === 'manual' ? '手动运行' : `按 ${taskDraft.cadence} 自动检查`,
+    });
+    toast.success('后台任务已保存');
+    closeModal();
+  };
+
+  const submitRoute = async () => {
+    const name = routeDraft.name.trim();
+    if (!name) {
+      toast.error('请填写规则名称');
+      return;
+    }
+    await saveRoutingRule({
+      name,
+      matcher: routeDraft.matcher.trim(),
+      complexity: 'normal',
+      preferredModelStrategy: routeDraft.preferredModelStrategy,
+      targetAgentId: routeDraft.targetAgentId || selectedProject?.agentId || agents[0]?.id || 'main',
+      notes: routeDraft.notes.trim() || undefined,
+      enabled: true,
+    });
+    toast.success('路由规则已保存');
+    closeModal();
+  };
+
+  const submitReport = async () => {
+    if (!selectedProject) return;
+    const title = reportDraft.title.trim();
+    if (!title) {
+      toast.error('请填写报告标题');
+      return;
+    }
+    await saveReport({
+      projectId: selectedProject.id,
+      title,
+      summary: reportDraft.summary.trim(),
       status: 'draft',
     });
     toast.success('报告已生成');
+    closeModal();
   };
 
-  const runAlwaysOnTask = async (title: string, objective: string, project = selectedProject, taskId?: string) => {
+  const runAlwaysOnTask = useCallback(async (title: string, objective: string, project = selectedProject, taskId?: string) => {
     if (!project) return;
     const startedAt = Date.now();
     try {
@@ -370,7 +419,27 @@ export function Workbench() {
       });
       toast.error(String(error));
     }
-  };
+  }, [agents, markAlwaysOnTaskRun, navigate, saveReport, selectedProject, sendMessage]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const tick = () => {
+      const now = Date.now();
+      const due = alwaysOnTasks.find((task) => (
+        task.status === 'active'
+        && task.cadence !== 'manual'
+        && typeof task.nextRunAt === 'number'
+        && task.nextRunAt <= now
+      ));
+      if (!due) return;
+      const project = projects.find((item) => item.id === due.projectId);
+      if (!project) return;
+      void runAlwaysOnTask(due.title, due.objective, project, due.id);
+    };
+    const timer = window.setInterval(tick, 60_000);
+    tick();
+    return () => window.clearInterval(timer);
+  }, [alwaysOnTasks, hydrated, projects, runAlwaysOnTask]);
 
   return (
     <div data-testid="workbench-page" className="flex flex-col -m-6 dark:bg-background h-[calc(100vh-2.5rem)] overflow-hidden">
@@ -467,7 +536,12 @@ export function Workbench() {
             <div className="grid gap-4 xl:grid-cols-2">
               <CapabilityCard title="白盒记忆管理" icon={<Brain className="h-5 w-5" />} actionLabel="新增记忆" onAction={createMemory}>
                 {projectMemories.slice(0, 5).map((memory) => (
-                  <Row key={memory.id} title={memory.title} detail={`${memory.confidence} · ${memory.source} · ${formatTime(memory.updatedAt)}`} onDelete={() => void deleteMemory(memory.id)} />
+                  <Row
+                    key={memory.id}
+                    title={memory.title}
+                    detail={`${memory.confidence} · ${memory.source} · ${formatTime(memory.updatedAt)}`}
+                    onDelete={() => void deleteMemory(memory.id)}
+                  />
                 ))}
                 {projectMemories.length === 0 && <EmptyText text="暂无记忆。可把重要偏好、项目事实、错误修正写入这里。" />}
               </CapabilityCard>
@@ -623,7 +697,134 @@ export function Workbench() {
           </div>
         </div>
       </div>
+      {activeModal === 'memory' && (
+        <WorkbenchActionModal title="新增记忆" description="把项目偏好、事实或修正记录写入当前工作区。用途更偏白盒记忆，独立知识库请在左侧知识库页面维护。" onClose={closeModal} onSubmit={() => void submitMemory()}>
+          <FormField label="标题">
+            <Input value={memoryDraft.title} onChange={(event) => setMemoryDraft({ ...memoryDraft, title: event.target.value })} className={inputClasses} autoFocus />
+          </FormField>
+          <FormField label="内容">
+            <textarea value={memoryDraft.content} onChange={(event) => setMemoryDraft({ ...memoryDraft, content: event.target.value })} className={`${inputClasses} min-h-28 w-full p-3`} />
+          </FormField>
+          <FormField label="可信度">
+            <select value={memoryDraft.confidence} onChange={(event) => setMemoryDraft({ ...memoryDraft, confidence: event.target.value as typeof memoryDraft.confidence })} className={selectClasses}>
+              <option value="low">低</option>
+              <option value="medium">中</option>
+              <option value="high">高</option>
+            </select>
+          </FormField>
+        </WorkbenchActionModal>
+      )}
+      {activeModal === 'task' && (
+        <WorkbenchActionModal title="新增后台任务" description="创建一个 Always-on 任务，可手动运行，也可按频率自动交给绑定智能体处理。" onClose={closeModal} onSubmit={() => void submitTask()}>
+          <FormField label="任务名称">
+            <Input value={taskDraft.title} onChange={(event) => setTaskDraft({ ...taskDraft, title: event.target.value })} className={inputClasses} autoFocus />
+          </FormField>
+          <FormField label="任务目标">
+            <textarea value={taskDraft.objective} onChange={(event) => setTaskDraft({ ...taskDraft, objective: event.target.value })} className={`${inputClasses} min-h-28 w-full p-3`} />
+          </FormField>
+          <FormField label="执行频率">
+            <select value={taskDraft.cadence} onChange={(event) => setTaskDraft({ ...taskDraft, cadence: event.target.value as AlwaysOnTask['cadence'] })} className={selectClasses}>
+              <option value="manual">手动</option>
+              <option value="hourly">每小时</option>
+              <option value="daily">每天</option>
+              <option value="weekly">每周</option>
+            </select>
+          </FormField>
+        </WorkbenchActionModal>
+      )}
+      {activeModal === 'route' && (
+        <WorkbenchActionModal title="新增路由规则" description="按关键词和模型策略，把任务分配给更合适的智能体。" onClose={closeModal} onSubmit={() => void submitRoute()}>
+          <FormField label="规则名称">
+            <Input value={routeDraft.name} onChange={(event) => setRouteDraft({ ...routeDraft, name: event.target.value })} className={inputClasses} autoFocus />
+          </FormField>
+          <FormField label="匹配关键词">
+            <Input value={routeDraft.matcher} onChange={(event) => setRouteDraft({ ...routeDraft, matcher: event.target.value })} className={inputClasses} placeholder="例如：搜索,代码,总结" />
+          </FormField>
+          <div className="grid gap-3 md:grid-cols-2">
+            <FormField label="模型策略">
+              <select value={routeDraft.preferredModelStrategy} onChange={(event) => setRouteDraft({ ...routeDraft, preferredModelStrategy: event.target.value as RoutingRule['preferredModelStrategy'] })} className={selectClasses}>
+                <option value="fast">速度优先</option>
+                <option value="balanced">均衡</option>
+                <option value="quality">质量优先</option>
+              </select>
+            </FormField>
+            <FormField label="目标智能体">
+              <select value={routeDraft.targetAgentId} onChange={(event) => setRouteDraft({ ...routeDraft, targetAgentId: event.target.value })} className={selectClasses}>
+                {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
+                {agents.length === 0 && <option value="main">Main</option>}
+              </select>
+            </FormField>
+          </div>
+          <FormField label="说明">
+            <textarea value={routeDraft.notes} onChange={(event) => setRouteDraft({ ...routeDraft, notes: event.target.value })} className={`${inputClasses} min-h-24 w-full p-3`} />
+          </FormField>
+        </WorkbenchActionModal>
+      )}
+      {activeModal === 'report' && (
+        <WorkbenchActionModal title="生成运行报告" description="基于最新工作流记录生成报告草稿，也可以手动补充结论、文件和风险。" onClose={closeModal} onSubmit={() => void submitReport()}>
+          <FormField label="报告标题">
+            <Input value={reportDraft.title} onChange={(event) => setReportDraft({ ...reportDraft, title: event.target.value })} className={inputClasses} autoFocus />
+          </FormField>
+          <FormField label="报告内容">
+            <textarea value={reportDraft.summary} onChange={(event) => setReportDraft({ ...reportDraft, summary: event.target.value })} className={`${inputClasses} min-h-40 w-full p-3`} />
+          </FormField>
+        </WorkbenchActionModal>
+      )}
     </div>
+  );
+}
+
+function WorkbenchActionModal({
+  title,
+  description,
+  children,
+  onClose,
+  onSubmit,
+}: {
+  title: string;
+  description: string;
+  children: ReactNode;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+      <form
+        className="w-full max-w-xl rounded-2xl border border-black/10 bg-background p-5 shadow-2xl dark:border-white/10"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit();
+        }}
+      >
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-semibold text-foreground">{title}</h2>
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">{description}</p>
+          </div>
+          <Button type="button" variant="ghost" size="icon" onClick={onClose} className="h-8 w-8 rounded-full">
+            ×
+          </Button>
+        </div>
+        <div className="space-y-4">{children}</div>
+        <div className="mt-6 flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose} className="rounded-full px-4">
+            取消
+          </Button>
+          <Button type="submit" className="rounded-full px-4">
+            保存
+          </Button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function FormField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="grid gap-2">
+      <span className="text-sm font-medium text-foreground">{label}</span>
+      {children}
+    </label>
   );
 }
 

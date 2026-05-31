@@ -433,11 +433,11 @@ async function writeAgentToolPermissions(config: AgentConfigDocument, entry: Age
   const workspace = getAgentWorkspacePath(config, entry);
   await ensureDir(workspace);
   const toolsPath = getAgentToolsPath(config, entry);
-  let existing = '';
+  let existing = '# Tools\n';
   try {
     existing = await readFile(toolsPath, 'utf-8');
   } catch {
-    existing = '# Tools\n';
+    // Keep the default tools document when the file has not been created yet.
   }
   const permissions = normalizeToolPermissions(entry.toolPermissions);
   await writeFile(toolsPath, mergeManagedBlock(existing, buildToolPermissionsBlock(permissions)), 'utf-8');

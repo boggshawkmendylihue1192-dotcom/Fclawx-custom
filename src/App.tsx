@@ -18,6 +18,7 @@ import { Skills } from './pages/Skills';
 import { Cron } from './pages/Cron';
 import { Workflows } from './pages/Workflows';
 import { Workbench } from './pages/Workbench';
+import { Knowledge } from './pages/Knowledge';
 import { Dreams } from './pages/Dreams';
 import { ImageGenerationPage } from './pages/ImageGeneration';
 import { Settings } from './pages/Settings';
@@ -27,6 +28,7 @@ import { useUpdateStore } from './stores/update';
 import { useGatewayStore } from './stores/gateway';
 import { useProviderStore } from './stores/providers';
 import { useWorkbenchStore } from './stores/workbench';
+import { useKnowledgeStore } from './stores/knowledge';
 import { applyGatewayTransportPreference } from './lib/api-client';
 import { rendererExtensionRegistry } from './extensions/registry';
 import { loadExternalRendererExtensions } from './extensions/_ext-bridge.generated';
@@ -111,6 +113,7 @@ function App() {
   const initUpdate = useUpdateStore((state) => state.init);
   const initProviders = useProviderStore((state) => state.init);
   const initWorkbench = useWorkbenchStore((state) => state.hydrate);
+  const initKnowledge = useKnowledgeStore((state) => state.hydrate);
 
   useEffect(() => {
     let cancelled = false;
@@ -147,6 +150,10 @@ function App() {
   useEffect(() => {
     void initWorkbench();
   }, [initWorkbench]);
+
+  useEffect(() => {
+    void initKnowledge();
+  }, [initKnowledge]);
 
   // Redirect to setup wizard if not complete
   useEffect(() => {
@@ -220,6 +227,7 @@ function App() {
             <Route path="/cron" element={<Cron />} />
             <Route path="/workflows" element={<Workflows />} />
             <Route path="/workbench" element={<Workbench />} />
+            <Route path="/knowledge" element={<Knowledge />} />
             <Route path="/image-generation" element={devModeUnlocked ? <ImageGenerationPage /> : <Navigate to="/" replace />} />
             <Route path="/dreams" element={devModeUnlocked ? <Dreams /> : <Navigate to="/" replace />} />
             <Route path="/settings/*" element={<Settings />} />

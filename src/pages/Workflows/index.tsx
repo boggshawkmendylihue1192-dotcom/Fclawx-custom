@@ -27,9 +27,10 @@ import { Label } from '@/components/ui/label';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { useAgentsStore } from '@/stores/agents';
 import { useChatStore } from '@/stores/chat';
+import { selectKnowledgeForWorkflow, useKnowledgeStore } from '@/stores/knowledge';
 import { useWorkflowsStore } from '@/stores/workflows';
 import { cn } from '@/lib/utils';
-import type { WorkflowDefinition, WorkflowStep } from '@/types/workflow';
+import type { WorkflowDefinition, WorkflowRoleTemplate, WorkflowStep } from '@/types/workflow';
 
 const inputClasses = 'h-[44px] rounded-xl text-meta bg-transparent border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:border-blue-500 shadow-sm transition-all text-foreground placeholder:text-foreground/40';
 const selectClasses = 'h-[44px] w-full rounded-xl text-meta bg-transparent border border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:border-blue-500 shadow-sm transition-all text-foreground px-3';
@@ -40,19 +41,56 @@ const TEAM_TEMPLATES = [
     id: 'balanced',
     name: '通用协作组',
     description: '规划、执行、审查、总结都能覆盖，适合日常复杂任务。',
-    steps: ['规划任务', '资料或代码处理', '质量审查', '汇总输出'],
+    steps: [
+      { title: '规划任务', roleTemplateId: 'requirements-analyst' },
+      { title: '资料或代码处理', roleTemplateId: 'implementation-engineer' },
+      { title: '质量审查', roleTemplateId: 'review-engineer' },
+      { title: '汇总输出', roleTemplateId: 'summarizer' },
+    ],
   },
   {
     id: 'research',
     name: '研究验证组',
     description: '多路搜索、交叉验证、结论合并，适合实时资料与方案判断。',
-    steps: ['拆解问题', '并行检索', '交叉验证', '中文总结'],
+    steps: [
+      { title: '拆解问题', roleTemplateId: 'requirements-analyst' },
+      { title: '并行检索', roleTemplateId: 'code-searcher' },
+      { title: '交叉验证', roleTemplateId: 'review-engineer' },
+      { title: '中文总结', roleTemplateId: 'summarizer' },
+    ],
   },
   {
     id: 'code',
     name: '开发交付组',
     description: '编码、测试、审查、修复闭环，适合功能开发和代码优化。',
-    steps: ['实现功能', '运行检查', '代码审查', '修复与总结'],
+    steps: [
+      { title: '实现功能', roleTemplateId: 'implementation-engineer' },
+      { title: '运行检查', roleTemplateId: 'test-release-engineer' },
+      { title: '代码审查', roleTemplateId: 'review-engineer' },
+      { title: '修复与总结', roleTemplateId: 'summarizer' },
+    ],
+  },
+  {
+    id: 'roundtable',
+    name: '实时圆桌讨论',
+    description: '多个智能体并行给观点，最后统一合并，适合接近实时讨论的体验。',
+    steps: [
+      { title: '主持人拆题', roleTemplateId: 'requirements-analyst' },
+      { title: '方案一观点', roleTemplateId: 'implementation-engineer' },
+      { title: '风险反驳', roleTemplateId: 'review-engineer' },
+      { title: '最终裁决', roleTemplateId: 'summarizer' },
+    ],
+  },
+  {
+    id: 'debate',
+    name: '辩论评审',
+    description: '正向方案、反向审查、裁判总结，适合重大改动前做决策。',
+    steps: [
+      { title: '正向方案', roleTemplateId: 'implementation-engineer' },
+      { title: '反向质疑', roleTemplateId: 'review-engineer' },
+      { title: '证据补充', roleTemplateId: 'code-searcher' },
+      { title: '裁判总结', roleTemplateId: 'summarizer' },
+    ],
   },
 ];
 
@@ -62,6 +100,7 @@ function createStep(agentId: string, index: number, patch: Partial<WorkflowStep>
     agentId,
     title: index === 0 ? '规划任务' : `步骤 ${index + 1}`,
     prompt: index === 0 ? '拆解任务，确认需要完成的工作。' : '',
+    roleTemplateId: index === 0 ? 'requirements-analyst' : undefined,
     dependsOn: [],
     contextMode: 'isolated',
     fallbackAgentId: '',
@@ -70,15 +109,28 @@ function createStep(agentId: string, index: number, patch: Partial<WorkflowStep>
   };
 }
 
-function normalizeStepForPrompt(step: WorkflowStep, index: number, agentsById: Record<string, string>): string {
+function normalizeStepForPrompt(
+  step: WorkflowStep,
+  index: number,
+  agentsById: Record<string, string>,
+  rolesById: Record<string, WorkflowRoleTemplate>,
+): string {
   const agentName = agentsById[step.agentId] || step.agentId;
+  const role = step.roleTemplateId ? rolesById[step.roleTemplateId] : undefined;
   const depends = step.dependsOn?.length ? step.dependsOn.join(', ') : 'none';
   const fallback = step.fallbackAgentId ? `\nFallback agentId: ${step.fallbackAgentId}` : '';
   const retry = step.retryCount ? `\nRetry count: ${step.retryCount}` : '';
+  const roleBlock = role ? [
+    `Role template: ${role.name} (${role.id})`,
+    `Role description: ${role.description || 'none'}`,
+    'Role instructions:',
+    role.instructions,
+  ].join('\n') : '';
   return [
     `${index + 1}. ${step.title}`,
     `Step id: ${step.id}`,
     `Target agentId: ${step.agentId} (${agentName})`,
+    roleBlock,
     `Depends on step ids: ${depends}`,
     `Context mode: ${step.contextMode || 'isolated'}`,
     fallback,
@@ -88,8 +140,36 @@ function normalizeStepForPrompt(step: WorkflowStep, index: number, agentsById: R
   ].filter(Boolean).join('\n');
 }
 
-function composeWorkflowPrompt(workflow: WorkflowDefinition, agentsById: Record<string, string>): string {
-  const steps = workflow.steps.map((step, index) => normalizeStepForPrompt(step, index, agentsById)).join('\n\n');
+function composeWorkflowPrompt(
+  workflow: WorkflowDefinition,
+  agentsById: Record<string, string>,
+  rolesById: Record<string, WorkflowRoleTemplate>,
+): string {
+  const steps = workflow.steps.map((step, index) => normalizeStepForPrompt(step, index, agentsById, rolesById)).join('\n\n');
+  const workflowText = [
+    workflow.name,
+    workflow.description,
+    ...workflow.steps.flatMap((step) => [step.title, step.prompt]),
+  ].join('\n');
+  const knowledgeItems = selectKnowledgeForWorkflow({
+    workflowId: workflow.id,
+    agentIds: [...new Set(workflow.steps.map((step) => step.agentId))],
+    text: workflowText,
+    limit: 8,
+  });
+  const knowledgeBlock = knowledgeItems.length > 0
+    ? [
+      '<knowledge_base>',
+      ...knowledgeItems.map((item) => [
+        `- ${item.title}`,
+        `  scope: ${item.scope || 'project'}${item.agentId ? ` / agentId: ${item.agentId}` : ''}${item.workflowId ? ` / workflowId: ${item.workflowId}` : ''}`,
+        item.tags?.length ? `  tags: ${item.tags.join(', ')}` : '',
+        `  content: ${item.content}`,
+      ].filter(Boolean).join('\n')),
+      '</knowledge_base>',
+      '',
+    ].join('\n')
+    : '';
   const executionGuidance = {
     sequential: '按顺序执行步骤。任何分配给其他智能体的步骤，都必须用 sessions_spawn 并传入 exact target agentId；需要结果时调用 sessions_yield，然后继续下一步。',
     parallel: '先用 sessions_spawn 启动所有彼此独立的步骤，每一步都必须使用对应的 exact target agentId。然后调用 sessions_yield 收集子任务结果，并综合输出。',
@@ -103,6 +183,7 @@ function composeWorkflowPrompt(workflow: WorkflowDefinition, agentsById: Record<
     workflow.reviewerAgentId ? `审查智能体 agentId：${workflow.reviewerAgentId}` : '',
     workflow.maxRuntimeMinutes ? `最长运行时间：${workflow.maxRuntimeMinutes} minutes` : '',
     workflow.maxTokenBudget ? `最大 token 预算：${workflow.maxTokenBudget}` : '',
+    knowledgeBlock,
     `智能体分配策略：${workflow.assignmentStrategy || 'manual'}`,
     `模型速度策略：${workflow.modelStrategy || 'balanced'}`,
     '',
@@ -114,6 +195,8 @@ function composeWorkflowPrompt(workflow: WorkflowDefinition, agentsById: Record<
     '- modelStrategy 为 fast 时优先把独立子任务交给更快/更便宜的智能体模型；quality 时保留复杂推理给高质量模型；balanced 时在速度和质量之间折中。',
     '- 步骤失败时，先按 retryCount 重试；仍失败且 fallbackAgentId 存在时，改用备用智能体。',
     '- 子任务结果是证据；最终回答前要核对、去重、处理冲突，并由 reviewerAgentId 审查或总结。',
+    '- 如果步骤带有 Role template，必须把该职责说明作为该子任务的系统级约束传给目标智能体。',
+    '- 如果存在 knowledge_base，必须优先遵守其中的项目规则、历史约束和已知踩坑；如与用户最新指令冲突，以用户最新指令为准并说明冲突。',
     `- ${executionGuidance}`,
     '',
     '工作流步骤：',
@@ -123,15 +206,20 @@ function composeWorkflowPrompt(workflow: WorkflowDefinition, agentsById: Record<
 
 function applyTeamTemplate(baseAgentId: string, templateId: string): Pick<WorkflowDefinition, 'teamTemplate' | 'executionMode' | 'steps' | 'reviewerAgentId'> {
   const template = TEAM_TEMPLATES.find((item) => item.id === templateId) ?? TEAM_TEMPLATES[0];
-  const steps = template.steps.map((title, index) => createStep(baseAgentId, index, {
-    title,
-    prompt: `${title}。请保持输出简洁、可验证，并说明需要交给下一步的要点。`,
-    dependsOn: index === 0 ? [] : templateId === 'research' && index === 1 ? [] : [stepsIdPlaceholder(index - 1)],
+  const steps = template.steps.map((templateStep, index) => createStep(baseAgentId, index, {
+    title: templateStep.title,
+    roleTemplateId: templateStep.roleTemplateId,
+    prompt: `${templateStep.title}。请保持输出简洁、可验证，并说明需要交给下一步的要点。`,
+    dependsOn: index === 0
+      ? []
+      : (templateId === 'research' || templateId === 'roundtable' || templateId === 'debate') && index < 3
+        ? []
+        : [stepsIdPlaceholder(index - 1)],
   }));
   const idByIndex = steps.map((step) => step.id);
   return {
     teamTemplate: template.id,
-    executionMode: templateId === 'balanced' ? 'parallel' : 'dag',
+    executionMode: templateId === 'balanced' || templateId === 'roundtable' || templateId === 'debate' ? 'parallel' : 'dag',
     reviewerAgentId: baseAgentId,
     steps: steps.map((step) => ({
       ...step,
@@ -146,20 +234,38 @@ function stepsIdPlaceholder(index: number): string {
 
 export function Workflows() {
   const navigate = useNavigate();
-  const { workflows, runs, loading, error, fetchWorkflows, saveWorkflow, deleteWorkflow, saveRun, deleteRun } = useWorkflowsStore();
+  const {
+    workflows,
+    roleTemplates,
+    runs,
+    loading,
+    error,
+    fetchWorkflows,
+    saveWorkflow,
+    deleteWorkflow,
+    saveRoleTemplate,
+    deleteRoleTemplate,
+    saveRun,
+    deleteRun,
+  } = useWorkflowsStore();
   const { agents, fetchAgents } = useAgentsStore();
+  const hydrateKnowledge = useKnowledgeStore((state) => state.hydrate);
   const sendMessage = useChatStore((state) => state.sendMessage);
   const [editing, setEditing] = useState<WorkflowDefinition | null>(null);
   const [workflowToDelete, setWorkflowToDelete] = useState<WorkflowDefinition | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
 
   useEffect(() => {
-    void Promise.all([fetchWorkflows(), fetchAgents()]);
-  }, [fetchAgents, fetchWorkflows]);
+    void Promise.all([fetchWorkflows(), fetchAgents(), hydrateKnowledge()]);
+  }, [fetchAgents, fetchWorkflows, hydrateKnowledge]);
 
   const agentsById = useMemo(
     () => Object.fromEntries(agents.map((agent) => [agent.id, agent.name])),
     [agents],
+  );
+  const rolesById = useMemo(
+    () => Object.fromEntries(roleTemplates.map((role) => [role.id, role])),
+    [roleTemplates],
   );
   const firstAgentId = agents[0]?.id || 'main';
 
@@ -194,7 +300,7 @@ export function Workflows() {
         stepCount: workflow.steps.length,
         agentIds: [...new Set(workflow.steps.map((step) => step.agentId))],
       });
-      await sendMessage(composeWorkflowPrompt(workflow, agentsById), undefined, workflow.steps[0]?.agentId || 'main');
+      await sendMessage(composeWorkflowPrompt(workflow, agentsById, rolesById), undefined, workflow.steps[0]?.agentId || 'main');
       await saveRun({
         id: runId,
         workflowId: workflow.id,
@@ -230,7 +336,12 @@ export function Workflows() {
   };
 
   const exportWorkflows = async () => {
-    const payload = JSON.stringify({ workflows, exportedAt: new Date().toISOString(), source: 'ClawX workflows' }, null, 2);
+    const payload = JSON.stringify({
+      workflows,
+      roleTemplates: roleTemplates.filter((role) => !role.builtIn),
+      exportedAt: new Date().toISOString(),
+      source: 'ClawX workflows',
+    }, null, 2);
     await navigator.clipboard.writeText(payload);
     toast.success('工作流 JSON 已复制');
   };
@@ -239,13 +350,17 @@ export function Workflows() {
     const raw = window.prompt('粘贴工作流 JSON');
     if (!raw) return;
     try {
-      const parsed = JSON.parse(raw) as { workflows?: Partial<WorkflowDefinition>[] };
+      const parsed = JSON.parse(raw) as { workflows?: Partial<WorkflowDefinition>[]; roleTemplates?: Partial<WorkflowRoleTemplate>[] };
       const candidates = Array.isArray(parsed.workflows) ? parsed.workflows : [];
-      if (candidates.length === 0) throw new Error('没有找到 workflows 数组');
-      void Promise.all(candidates.map((workflow) => saveWorkflow({ ...workflow, id: workflow.id || crypto.randomUUID() })))
+      const roleCandidates = Array.isArray(parsed.roleTemplates) ? parsed.roleTemplates : [];
+      if (candidates.length === 0 && roleCandidates.length === 0) throw new Error('没有找到 workflows 或 roleTemplates 数组');
+      void Promise.all([
+        ...roleCandidates.map((role) => saveRoleTemplate({ ...role, id: role.id || crypto.randomUUID() })),
+        ...candidates.map((workflow) => saveWorkflow({ ...workflow, id: workflow.id || crypto.randomUUID() })),
+      ])
         .then(() => {
           void fetchWorkflows();
-          toast.success(`已导入 ${candidates.length} 个工作流`);
+          toast.success(`已导入 ${candidates.length} 个工作流、${roleCandidates.length} 个职责模板`);
         })
         .catch((importError) => toast.error(`导入失败：${String(importError)}`));
     } catch (importError) {
@@ -361,11 +476,20 @@ export function Workflows() {
         <WorkflowEditor
           workflow={editing}
           agents={agents}
+          roleTemplates={roleTemplates}
           onClose={() => setEditing(null)}
           onSave={async (workflow) => {
             await saveWorkflow(workflow);
             setEditing(null);
             toast.success('工作流已保存');
+          }}
+          onSaveRoleTemplate={async (role) => {
+            await saveRoleTemplate(role);
+            toast.success('职责模板已保存');
+          }}
+          onDeleteRoleTemplate={async (id) => {
+            await deleteRoleTemplate(id);
+            toast.success('职责模板已删除');
           }}
         />
       )}
@@ -392,16 +516,27 @@ export function Workflows() {
 function WorkflowEditor({
   workflow,
   agents,
+  roleTemplates,
   onClose,
   onSave,
+  onSaveRoleTemplate,
+  onDeleteRoleTemplate,
 }: {
   workflow: WorkflowDefinition;
   agents: Array<{ id: string; name: string }>;
+  roleTemplates: WorkflowRoleTemplate[];
   onClose: () => void;
   onSave: (workflow: WorkflowDefinition) => Promise<void>;
+  onSaveRoleTemplate: (role: Partial<WorkflowRoleTemplate>) => Promise<void>;
+  onDeleteRoleTemplate: (id: string) => Promise<void>;
 }) {
   const [draft, setDraft] = useState(workflow);
   const [saving, setSaving] = useState(false);
+  const [roleDraft, setRoleDraft] = useState<Partial<WorkflowRoleTemplate>>({
+    name: '',
+    description: '',
+    instructions: '',
+  });
   const firstAgentId = agents[0]?.id || 'main';
 
   const updateStep = (stepId: string, patch: Partial<WorkflowStep>) => {
@@ -472,6 +607,81 @@ function WorkflowEditor({
                 <p className="text-xs leading-5 text-muted-foreground">{template.description}</p>
               </button>
             ))}
+          </div>
+
+          <div className="rounded-2xl border border-black/10 dark:border-white/10 p-4 space-y-4">
+            <div className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+              <div>
+                <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <Users className="h-4 w-4" />
+                  职责模板
+                </div>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  给每个步骤绑定“需求分析、实现、审查”等职责，只在工作流运行时生效，不覆盖原智能体设置。
+                </p>
+              </div>
+              <span className="text-xs text-muted-foreground">{roleTemplates.length} 个可用</span>
+            </div>
+            <div className="grid gap-3 md:grid-cols-3">
+              <Input
+                value={roleDraft.name ?? ''}
+                onChange={(event) => setRoleDraft((current) => ({ ...current, name: event.target.value }))}
+                className={inputClasses}
+                placeholder="职责名称"
+              />
+              <Input
+                value={roleDraft.description ?? ''}
+                onChange={(event) => setRoleDraft((current) => ({ ...current, description: event.target.value }))}
+                className={inputClasses}
+                placeholder="职责描述"
+              />
+              <Button
+                variant="outline"
+                disabled={!roleDraft.name?.trim() || !roleDraft.instructions?.trim()}
+                onClick={async () => {
+                  await onSaveRoleTemplate(roleDraft);
+                  setRoleDraft({ name: '', description: '', instructions: '' });
+                }}
+                className="h-[44px] rounded-xl"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                保存职责
+              </Button>
+            </div>
+            <textarea
+              value={roleDraft.instructions ?? ''}
+              onChange={(event) => setRoleDraft((current) => ({ ...current, instructions: event.target.value }))}
+              className="min-h-[82px] w-full rounded-xl text-sm bg-transparent border border-black/10 dark:border-white/10 p-3 resize-y"
+              placeholder="写清楚这个职责应该怎么思考、能做什么、不能做什么"
+            />
+            <div className="flex flex-wrap gap-2">
+              {roleTemplates.map((role) => (
+                <button
+                  type="button"
+                  key={role.id}
+                  onClick={() => setRoleDraft(role.builtIn
+                    ? {
+                      name: `${role.name} 副本`,
+                      description: role.description,
+                      instructions: role.instructions,
+                    }
+                    : role)}
+                  className="group inline-flex max-w-full items-center gap-2 rounded-full border border-black/10 dark:border-white/10 px-3 py-1.5 text-xs text-foreground hover:bg-black/5 dark:hover:bg-white/5"
+                  title={role.instructions}
+                >
+                  <span className="truncate">{role.name}</span>
+                  {role.builtIn ? <span className="text-muted-foreground">预设</span> : (
+                    <Trash2
+                      className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void onDeleteRoleTemplate(role.id);
+                      }}
+                    />
+                  )}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="grid gap-4 md:grid-cols-5">
@@ -547,10 +757,14 @@ function WorkflowEditor({
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>
-                <div className="grid gap-3 md:grid-cols-[1fr_210px_170px]">
+                <div className="grid gap-3 md:grid-cols-[1fr_210px_190px_150px]">
                   <Input value={step.title} onChange={(event) => updateStep(step.id, { title: event.target.value })} className={inputClasses} />
                   <select value={step.agentId} onChange={(event) => updateStep(step.id, { agentId: event.target.value })} className={selectClasses}>
                     {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
+                  </select>
+                  <select value={step.roleTemplateId || ''} onChange={(event) => updateStep(step.id, { roleTemplateId: event.target.value || undefined })} className={selectClasses}>
+                    <option value="">不指定职责</option>
+                    {roleTemplates.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
                   </select>
                   <select value={step.contextMode || 'isolated'} onChange={(event) => updateStep(step.id, { contextMode: event.target.value as WorkflowStep['contextMode'] })} className={selectClasses}>
                     <option value="isolated">isolated</option>

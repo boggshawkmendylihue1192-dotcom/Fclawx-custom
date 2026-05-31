@@ -3,10 +3,20 @@ export interface WorkflowStep {
   agentId: string;
   title: string;
   prompt: string;
+  roleTemplateId?: string;
   dependsOn?: string[];
   contextMode?: 'isolated' | 'fork';
   fallbackAgentId?: string;
   retryCount?: number;
+}
+
+export interface WorkflowRoleTemplate {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  builtIn?: boolean;
+  updatedAt: number;
 }
 
 export interface WorkflowDefinition {
@@ -26,6 +36,7 @@ export interface WorkflowDefinition {
 
 export interface WorkflowsSnapshot {
   workflows: WorkflowDefinition[];
+  roleTemplates?: WorkflowRoleTemplate[];
   runs?: WorkflowRunRecord[];
 }
 

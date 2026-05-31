@@ -18,6 +18,7 @@ import { handleSessionRoutes } from './routes/sessions';
 import { handleCronRoutes } from './routes/cron';
 import { handleWorkflowRoutes } from './routes/workflows';
 import { handleWorkbenchRoutes } from './routes/workbench';
+import { handleKnowledgeRoutes } from './routes/knowledge';
 import { handleWebSearchRoutes } from './routes/web-search';
 import { handleDiagnosticsRoutes } from './routes/diagnostics';
 import { handleMediaRoutes } from './routes/media';
@@ -43,6 +44,7 @@ const coreRouteHandlers: RouteHandler[] = [
   handleCronRoutes,
   handleWorkflowRoutes,
   handleWorkbenchRoutes,
+  handleKnowledgeRoutes,
   handleWebSearchRoutes,
   handleDiagnosticsRoutes,
   handleLogRoutes,
