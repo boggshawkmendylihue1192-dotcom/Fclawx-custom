@@ -141,6 +141,7 @@ export interface ChatState {
   thinkingLevel: string | null;
 
   // Actions
+  setSessionModel: (modelRef: string | null) => Promise<void>;
   loadSessions: () => Promise<void>;
   switchSession: (key: string) => void;
   newSession: () => void;

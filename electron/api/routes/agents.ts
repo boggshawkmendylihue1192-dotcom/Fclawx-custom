@@ -4,6 +4,7 @@ import {
   clearChannelBinding,
   createAgent,
   deleteAgentConfig,
+  ensureModelAllowed,
   listAgentsSnapshot,
   removeAgentWorkspaceDirectory,
   resolveAccountIdForAgent,
@@ -162,6 +163,17 @@ export async function handleAgentRoutes(
   if (url.pathname.startsWith('/api/agents/') && req.method === 'PUT') {
     const suffix = url.pathname.slice('/api/agents/'.length);
     const parts = suffix.split('/').filter(Boolean);
+
+    if (parts.length === 1 && parts[0] === 'allowed-models') {
+      try {
+        const body = await parseJsonBody<{ modelRef?: string }>(req);
+        const snapshot = await ensureModelAllowed(body.modelRef || '');
+        sendJson(res, 200, { success: true, ...snapshot });
+      } catch (error) {
+        sendJson(res, 500, { success: false, error: String(error) });
+      }
+      return true;
+    }
 
     if (parts.length === 1) {
       try {

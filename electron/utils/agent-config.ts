@@ -50,6 +50,7 @@ interface AgentSubagentsConfig extends Record<string, unknown> {
 interface AgentDefaultsConfig {
   workspace?: string;
   model?: string | AgentModelConfig;
+  models?: Record<string, Record<string, unknown>>;
   subagents?: AgentSubagentsConfig;
   [key: string]: unknown;
 }
@@ -1028,6 +1029,18 @@ function isValidModelRef(modelRef: string): boolean {
   return firstSlash > 0 && firstSlash < modelRef.length - 1;
 }
 
+function ensureAllowedModel(defaults: AgentDefaultsConfig, modelRef: string): void {
+  const existingModels = defaults.models && typeof defaults.models === 'object' && !Array.isArray(defaults.models)
+    ? defaults.models
+    : {};
+  defaults.models = {
+    ...existingModels,
+    [modelRef]: {
+      ...(existingModels[modelRef] || {}),
+    },
+  };
+}
+
 export async function updateAgentModel(agentId: string, modelRef: string | null): Promise<AgentsSnapshot> {
   return withConfigLock(async () => {
     const config = await readOpenClawConfig() as AgentConfigDocument;
@@ -1047,6 +1060,11 @@ export async function updateAgentModel(agentId: string, modelRef: string | null)
         throw new Error('modelRef must be in "provider/model" format');
       }
       nextEntry.model = { primary: normalizedModelRef };
+      const defaults = (agentsConfig.defaults && typeof agentsConfig.defaults === 'object'
+        ? { ...agentsConfig.defaults }
+        : {}) as AgentDefaultsConfig;
+      ensureAllowedModel(defaults, normalizedModelRef);
+      agentsConfig.defaults = defaults;
     }
 
     entries[index] = nextEntry;
@@ -1057,6 +1075,34 @@ export async function updateAgentModel(agentId: string, modelRef: string | null)
 
     await writeOpenClawConfig(config);
     logger.info('Updated agent model', { agentId, modelRef: normalizedModelRef || null });
+    return buildSnapshotFromConfig(config);
+  });
+}
+
+export async function ensureModelAllowed(modelRef: string): Promise<AgentsSnapshot> {
+  return withConfigLock(async () => {
+    const normalizedModelRef = typeof modelRef === 'string' ? modelRef.trim() : '';
+    if (!normalizedModelRef) {
+      throw new Error('modelRef is required');
+    }
+    if (!isValidModelRef(normalizedModelRef)) {
+      throw new Error('modelRef must be in "provider/model" format');
+    }
+
+    const config = await readOpenClawConfig() as AgentConfigDocument;
+    const { agentsConfig } = normalizeAgentsConfig(config);
+    const defaults = (agentsConfig.defaults && typeof agentsConfig.defaults === 'object'
+      ? { ...agentsConfig.defaults }
+      : {}) as AgentDefaultsConfig;
+    ensureAllowedModel(defaults, normalizedModelRef);
+    agentsConfig.defaults = defaults;
+    config.agents = {
+      ...agentsConfig,
+      defaults,
+    };
+
+    await writeOpenClawConfig(config);
+    logger.info('Allowed model for session selection', { modelRef: normalizedModelRef });
     return buildSnapshotFromConfig(config);
   });
 }

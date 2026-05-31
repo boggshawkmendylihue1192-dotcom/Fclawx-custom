@@ -1173,6 +1173,7 @@ export async function setOpenClawDefaultModel(
       primary: model,
       fallbacks: fallbackModels,
     };
+    ensureAgentsDefaultsAllowedModels(defaults, [model, ...fallbackModels]);
     agents.defaults = defaults;
     config.agents = agents;
 
@@ -1261,6 +1262,81 @@ function extractFallbackModelIds(provider: string, fallbackModels: string[]): st
   return fallbackModels
     .filter((fallback) => fallback.startsWith(`${provider}/`))
     .map((fallback) => fallback.slice(provider.length + 1));
+}
+
+function ensureAgentsDefaultsAllowedModels(
+  defaults: Record<string, unknown>,
+  modelRefs: string[],
+): void {
+  const existingModels = (
+    defaults.models && typeof defaults.models === 'object' && !Array.isArray(defaults.models)
+      ? defaults.models as Record<string, unknown>
+      : {}
+  );
+  const nextModels: Record<string, unknown> = { ...existingModels };
+  for (const modelRef of modelRefs) {
+    const normalized = typeof modelRef === 'string' ? modelRef.trim() : '';
+    if (!normalized) continue;
+    nextModels[normalized] = (
+      nextModels[normalized] && typeof nextModels[normalized] === 'object' && !Array.isArray(nextModels[normalized])
+        ? nextModels[normalized]
+        : {}
+    );
+  }
+  defaults.models = nextModels;
+}
+
+function collectModelRefsFromModelConfig(modelConfig: unknown): string[] {
+  if (typeof modelConfig === 'string' && modelConfig.trim()) {
+    return [modelConfig.trim()];
+  }
+  if (!modelConfig || typeof modelConfig !== 'object' || Array.isArray(modelConfig)) {
+    return [];
+  }
+  const model = modelConfig as Record<string, unknown>;
+  const refs: string[] = [];
+  if (typeof model.primary === 'string' && model.primary.trim()) {
+    refs.push(model.primary.trim());
+  }
+  if (Array.isArray(model.fallbacks)) {
+    for (const fallback of model.fallbacks) {
+      if (typeof fallback === 'string' && fallback.trim()) {
+        refs.push(fallback.trim());
+      }
+    }
+  }
+  return refs;
+}
+
+function ensureConfiguredAgentModelsAreAllowed(config: Record<string, unknown>): boolean {
+  const agents = config.agents && typeof config.agents === 'object' && !Array.isArray(config.agents)
+    ? config.agents as Record<string, unknown>
+    : null;
+  if (!agents) return false;
+
+  const defaults = agents.defaults && typeof agents.defaults === 'object' && !Array.isArray(agents.defaults)
+    ? { ...(agents.defaults as Record<string, unknown>) }
+    : {};
+
+  const refs = new Set<string>(collectModelRefsFromModelConfig(defaults.model));
+  if (Array.isArray(agents.list)) {
+    for (const entry of agents.list) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+      for (const ref of collectModelRefsFromModelConfig((entry as Record<string, unknown>).model)) {
+        refs.add(ref);
+      }
+    }
+  }
+
+  if (refs.size === 0) return false;
+  const before = JSON.stringify(defaults.models ?? {});
+  ensureAgentsDefaultsAllowedModels(defaults, [...refs]);
+  const after = JSON.stringify(defaults.models ?? {});
+  if (before === after) return false;
+
+  agents.defaults = defaults;
+  config.agents = agents;
+  return true;
 }
 
 function mergeProviderModels(
@@ -1876,6 +1952,7 @@ export async function setOpenClawDefaultModelWithOverride(
       primary: model,
       fallbacks: fallbackModels,
     };
+    ensureAgentsDefaultsAllowedModels(defaults, [model, ...fallbackModels]);
     agents.defaults = defaults;
     config.agents = agents;
 
@@ -3088,6 +3165,11 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
 
     if (healAnthropicMessagesMaxTokensInConfig(config)) {
       modified = true;
+    }
+
+    if (ensureConfiguredAgentModelsAreAllowed(config)) {
+      modified = true;
+      console.log('[sanitize] Added configured agent model refs to agents.defaults.models');
     }
 
     if (modified) {

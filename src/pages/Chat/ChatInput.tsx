@@ -213,13 +213,15 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false }:
   const isComposingRef = useRef(false);
   const gatewayStatus = useGatewayStore((s) => s.status);
   const agents = useAgentsStore((s) => s.agents);
-  const updateAgentModel = useAgentsStore((s) => s.updateAgentModel);
   const defaultModelRef = useAgentsStore((s) => s.defaultModelRef);
   const providerAccounts = useProviderStore((s) => s.accounts);
   const providerStatuses = useProviderStore((s) => s.statuses);
   const providerDefaultAccountId = useProviderStore((s) => s.defaultAccountId);
   const refreshProviderSnapshot = useProviderStore((s) => s.refreshProviderSnapshot);
   const currentAgentId = useChatStore((s) => s.currentAgentId);
+  const currentSessionKey = useChatStore((s) => s.currentSessionKey);
+  const sessions = useChatStore((s) => s.sessions);
+  const setSessionModel = useChatStore((s) => s.setSessionModel);
   const currentAgent = useMemo(
     () => (agents ?? []).find((agent) => agent.id === currentAgentId) ?? null,
     [agents, currentAgentId],
@@ -232,7 +234,12 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false }:
     () => buildConfiguredModelOptions(providerAccounts, providerStatuses, providerDefaultAccountId),
     [providerAccounts, providerDefaultAccountId, providerStatuses],
   );
-  const effectiveModelRef = optimisticModelRef || currentAgent?.modelRef || defaultModelRef || modelOptions[0]?.modelRef || null;
+  const currentSessionModelRef = useMemo(
+    () => sessions.find((session) => session.key === currentSessionKey)?.model || null,
+    [currentSessionKey, sessions],
+  );
+  const inheritedModelRef = currentAgent?.modelRef || defaultModelRef || modelOptions[0]?.modelRef || null;
+  const effectiveModelRef = optimisticModelRef || currentSessionModelRef || inheritedModelRef;
   const currentModelLabel = formatModelRefLabel(effectiveModelRef);
   const mentionableAgents = useMemo(
     () => (agents ?? []).filter((agent) => agent.id !== currentAgentId),
@@ -282,7 +289,7 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false }:
 
   useEffect(() => {
     setOptimisticModelRef(null);
-  }, [currentAgent?.modelRef, currentAgentId]);
+  }, [currentAgent?.modelRef, currentAgentId, currentSessionKey, currentSessionModelRef]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -433,21 +440,21 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false }:
     void loadQuickSkills();
   }, [skillPickerOpen, loadQuickSkills]);
 
-  const handleSelectModel = useCallback(async (modelRef: string) => {
+  const handleSelectModel = useCallback(async (modelRef: string | null) => {
     if (!currentAgent || switchingModelRef) return;
-    if (modelRef === effectiveModelRef) {
+    const nextEffectiveModelRef = modelRef || inheritedModelRef;
+    if (nextEffectiveModelRef === effectiveModelRef && (modelRef || null) === (currentSessionModelRef || null)) {
       setModelPickerOpen(false);
       textareaRef.current?.focus();
       return;
     }
 
     const previousModelRef = effectiveModelRef;
-    const desiredOverride = modelRef === (defaultModelRef || '').trim() ? null : modelRef;
-    setSwitchingModelRef(modelRef);
-    setOptimisticModelRef(modelRef);
+    setSwitchingModelRef(nextEffectiveModelRef);
+    setOptimisticModelRef(nextEffectiveModelRef);
     setModelPickerOpen(false);
     try {
-      await updateAgentModel(currentAgent.id, desiredOverride);
+      await setSessionModel(modelRef);
     } catch (error) {
       setOptimisticModelRef(previousModelRef);
       toast.error(t('composer.modelSwitchFailed', { error: String(error) }));
@@ -455,7 +462,7 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false }:
       setSwitchingModelRef(null);
       textareaRef.current?.focus();
     }
-  }, [currentAgent, defaultModelRef, effectiveModelRef, switchingModelRef, t, updateAgentModel]);
+  }, [currentAgent, currentSessionModelRef, effectiveModelRef, inheritedModelRef, setSessionModel, switchingModelRef, t]);
 
   // ── File staging via native dialog / Electron drag-drop paths ──
 
@@ -1018,6 +1025,25 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false }:
                       {t('composer.modelPickerTitle')}
                     </div>
                     <div className="max-h-64 overflow-y-auto">
+                      <button
+                        type="button"
+                        onClick={() => void handleSelectModel(null)}
+                        className={cn(
+                          'flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium transition-colors',
+                          !currentSessionModelRef ? 'bg-primary/10 text-foreground' : 'hover:bg-black/5 dark:hover:bg-white/5'
+                        )}
+                        data-testid="chat-model-picker-option-inherit"
+                      >
+                        <span className="truncate">
+                          {t('composer.modelInheritAgent', {
+                            model: formatModelRefLabel(inheritedModelRef),
+                            defaultValue: '跟随智能体默认：{{model}}',
+                          })}
+                        </span>
+                        {!currentSessionModelRef && (
+                          <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                        )}
+                      </button>
                       {modelOptions.map((option) => (
                         <button
                           key={option.modelRef}
@@ -1025,12 +1051,12 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false }:
                           onClick={() => void handleSelectModel(option.modelRef)}
                           className={cn(
                             'flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium transition-colors',
-                            option.modelRef === effectiveModelRef ? 'bg-primary/10 text-foreground' : 'hover:bg-black/5 dark:hover:bg-white/5'
+                            currentSessionModelRef === option.modelRef ? 'bg-primary/10 text-foreground' : 'hover:bg-black/5 dark:hover:bg-white/5'
                           )}
                           data-testid={`chat-model-picker-option-${option.label}`}
                         >
                           <span className="truncate">{option.label}</span>
-                          {option.modelRef === effectiveModelRef && (
+                          {currentSessionModelRef === option.modelRef && (
                             <span className="h-1.5 w-1.5 rounded-full bg-primary" />
                           )}
                         </button>

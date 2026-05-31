@@ -2319,6 +2319,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   thinkingLevel: null,
 
+  setSessionModel: async (modelRef: string | null) => {
+    const normalizedModelRef = typeof modelRef === 'string' ? modelRef.trim() : '';
+    const { currentSessionKey } = get();
+
+    if (normalizedModelRef) {
+      await hostApiFetch('/api/agents/allowed-models', {
+        method: 'PUT',
+        body: JSON.stringify({ modelRef: normalizedModelRef }),
+      });
+      await useGatewayStore.getState().rpc('sessions.patch', {
+        key: currentSessionKey,
+        model: normalizedModelRef,
+      });
+    } else {
+      await useGatewayStore.getState().rpc('sessions.patch', {
+        key: currentSessionKey,
+        model: null,
+      });
+    }
+
+    set((state) => ({
+      sessions: state.sessions.map((session) => (
+        session.key === currentSessionKey
+          ? { ...session, model: normalizedModelRef || undefined }
+          : session
+      )),
+    }));
+    await get().loadSessions();
+  },
+
   // ── Load sessions via sessions.list ──
 
   loadSessions: async () => {
