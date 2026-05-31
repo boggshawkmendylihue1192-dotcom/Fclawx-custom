@@ -1339,6 +1339,119 @@ function ensureConfiguredAgentModelsAreAllowed(config: Record<string, unknown>):
   return true;
 }
 
+function splitRuntimeModelRef(modelRef: string): { provider: string; modelId: string } | null {
+  const firstSlash = modelRef.indexOf('/');
+  if (firstSlash <= 0 || firstSlash >= modelRef.length - 1) return null;
+  return {
+    provider: modelRef.slice(0, firstSlash),
+    modelId: modelRef.slice(firstSlash + 1),
+  };
+}
+
+function isRegisteredRuntimeModelRef(config: Record<string, unknown>, modelRef: string): boolean {
+  const parsed = splitRuntimeModelRef(modelRef);
+  if (!parsed) return false;
+  const models = config.models && typeof config.models === 'object' && !Array.isArray(config.models)
+    ? config.models as Record<string, unknown>
+    : {};
+  const providers = models.providers && typeof models.providers === 'object' && !Array.isArray(models.providers)
+    ? models.providers as Record<string, unknown>
+    : {};
+  const providerConfig = providers[parsed.provider];
+  if (!providerConfig || typeof providerConfig !== 'object' || Array.isArray(providerConfig)) return false;
+  const providerModels = (providerConfig as Record<string, unknown>).models;
+  if (!Array.isArray(providerModels)) return true;
+  return providerModels.some((entry) => {
+    if (typeof entry === 'string') return entry === parsed.modelId;
+    return Boolean(
+      entry
+      && typeof entry === 'object'
+      && !Array.isArray(entry)
+      && (entry as Record<string, unknown>).id === parsed.modelId
+    );
+  });
+}
+
+function firstRegisteredRuntimeModelRef(config: Record<string, unknown>): string | null {
+  const models = config.models && typeof config.models === 'object' && !Array.isArray(config.models)
+    ? config.models as Record<string, unknown>
+    : {};
+  const providers = models.providers && typeof models.providers === 'object' && !Array.isArray(models.providers)
+    ? models.providers as Record<string, unknown>
+    : {};
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    if (!providerConfig || typeof providerConfig !== 'object' || Array.isArray(providerConfig)) continue;
+    const providerModels = (providerConfig as Record<string, unknown>).models;
+    if (!Array.isArray(providerModels) || providerModels.length === 0) continue;
+    for (const entry of providerModels) {
+      const modelId = typeof entry === 'string'
+        ? entry
+        : entry && typeof entry === 'object' && !Array.isArray(entry)
+          ? (entry as Record<string, unknown>).id
+          : null;
+      if (typeof modelId === 'string' && modelId.trim()) {
+        return `${providerId}/${modelId.trim()}`;
+      }
+    }
+  }
+  return null;
+}
+
+function repairUnregisteredAgentModelRefs(config: Record<string, unknown>): boolean {
+  const agents = config.agents && typeof config.agents === 'object' && !Array.isArray(config.agents)
+    ? config.agents as Record<string, unknown>
+    : null;
+  if (!agents) return false;
+
+  let modified = false;
+  const fallbackModelRef = firstRegisteredRuntimeModelRef(config);
+  const defaults = agents.defaults && typeof agents.defaults === 'object' && !Array.isArray(agents.defaults)
+    ? { ...(agents.defaults as Record<string, unknown>) }
+    : {};
+
+  const defaultPrimary = collectModelRefsFromModelConfig(defaults.model)[0];
+  if (defaultPrimary && !isRegisteredRuntimeModelRef(config, defaultPrimary)) {
+    if (fallbackModelRef) {
+      defaults.model = { primary: fallbackModelRef };
+    } else {
+      delete defaults.model;
+    }
+    modified = true;
+    console.log(`[sanitize] Repaired unregistered agents.defaults.model "${defaultPrimary}"`);
+  }
+
+  if (defaults.models && typeof defaults.models === 'object' && !Array.isArray(defaults.models)) {
+    const nextAllowed: Record<string, unknown> = {};
+    for (const [modelRef, value] of Object.entries(defaults.models as Record<string, unknown>)) {
+      if (isRegisteredRuntimeModelRef(config, modelRef)) {
+        nextAllowed[modelRef] = value;
+      } else {
+        modified = true;
+        console.log(`[sanitize] Removed unregistered agents.defaults.models entry "${modelRef}"`);
+      }
+    }
+    defaults.models = nextAllowed as Record<string, unknown>;
+  }
+
+  if (Array.isArray(agents.list)) {
+    agents.list = agents.list.map((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
+      const record = { ...(entry as Record<string, unknown>) };
+      const primary = collectModelRefsFromModelConfig(record.model)[0];
+      if (primary && !isRegisteredRuntimeModelRef(config, primary)) {
+        delete record.model;
+        modified = true;
+        console.log(`[sanitize] Removed unregistered model "${primary}" from agent "${record.id ?? 'unknown'}"`);
+      }
+      return record;
+    });
+  }
+
+  agents.defaults = defaults;
+  config.agents = agents;
+  return modified;
+}
+
 function mergeProviderModels(
   ...groups: Array<Array<Record<string, unknown>>>
 ): Array<Record<string, unknown>> {
@@ -3164,6 +3277,10 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
     }
 
     if (healAnthropicMessagesMaxTokensInConfig(config)) {
+      modified = true;
+    }
+
+    if (repairUnregisteredAgentModelRefs(config)) {
       modified = true;
     }
 

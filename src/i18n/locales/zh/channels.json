@@ -30,6 +30,7 @@
         "restartManual": "请手动重启网关",
         "configFailed": "配置失败: {{error}}",
         "bindingUpdated": "账号绑定已更新",
+        "bindingRefreshQueued": "绑定已保存，网关正在应用频道路由...",
         "defaultUpdated": "默认账号已更新",
         "accountDeleted": "账号已删除",
         "channelDeleted": "频道已删除"
@@ -112,7 +113,8 @@
             "rpc_timeout": "最近的网关 RPC 调用发生超时。",
             "gateway_not_running": "网关当前未运行。",
             "gateway_error": "网关当前处于错误状态。",
-            "runtime_error": "频道运行时返回了错误。"
+            "runtime_error": "频道运行时返回了错误。",
+            "wechat_session_expired": "微信登录会话已过期，请重新连接该账号。"
         },
         "restartGateway": "重启网关",
         "copyDiagnostics": "复制诊断快照",

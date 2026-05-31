@@ -2,7 +2,7 @@
  * Electron Main Process Entry
  * Manages window creation, system tray, and IPC handlers
  */
-import { app, BrowserWindow, nativeImage, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, nativeImage, session, shell } from 'electron';
 import type { Server } from 'node:http';
 import { join } from 'path';
 import { GatewayManager } from '../gateway/manager';
@@ -129,6 +129,7 @@ let gatewayManager!: GatewayManager;
 let clawHubService!: ClawHubService;
 let hostEventBus!: HostEventBus;
 let hostApiServer: Server | null = null;
+let closePromptInFlight = false;
 const mainWindowFocusState = createMainWindowFocusState();
 const quitLifecycleState = createQuitLifecycleState();
 
@@ -248,6 +249,40 @@ function focusMainWindow(): void {
   focusWindow(mainWindow);
 }
 
+function promptCloseAction(win: BrowserWindow): void {
+  if (closePromptInFlight || win.isDestroyed()) {
+    return;
+  }
+
+  closePromptInFlight = true;
+  void dialog.showMessageBox(win, {
+    type: 'question',
+    title: '关闭 ClawX？',
+    message: '你想如何处理 ClawX？',
+    detail: '最小化到托盘会让频道、后台任务和网关继续运行；退出会关闭软件并停止网关。',
+    buttons: ['最小化到托盘', '退出 ClawX', '取消'],
+    defaultId: 0,
+    cancelId: 2,
+    noLink: true,
+  }).then((result) => {
+    closePromptInFlight = false;
+    if (win.isDestroyed()) {
+      return;
+    }
+    if (result.response === 0) {
+      win.hide();
+      return;
+    }
+    if (result.response === 1) {
+      setQuitting();
+      app.quit();
+    }
+  }).catch((error) => {
+    closePromptInFlight = false;
+    logger.warn('Failed to show close action prompt:', error);
+  });
+}
+
 function createMainWindow(): BrowserWindow {
   const win = createWindow();
 
@@ -268,7 +303,7 @@ function createMainWindow(): BrowserWindow {
   win.on('close', (event) => {
     if (!isQuitting() && !isE2EMode) {
       event.preventDefault();
-      win.hide();
+      promptCloseAction(win);
     }
   });
 

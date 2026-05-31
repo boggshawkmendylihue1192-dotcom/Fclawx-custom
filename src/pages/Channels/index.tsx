@@ -60,6 +60,11 @@ interface GatewayHealthSummary {
   lastChannelsStatusFailureAt?: number;
 }
 
+interface ChannelRefreshResult {
+  mode?: 'none' | 'reload' | 'restart';
+  reason?: string;
+}
+
 interface GatewayDiagnosticSnapshot {
   capturedAt: number;
   platform: string;
@@ -471,19 +476,25 @@ export function Channels() {
 
   const handleBindAgent = async (channelType: string, accountId: string, agentId: string) => {
     try {
+      let refresh: ChannelRefreshResult | undefined;
       if (!agentId) {
-        await hostApiFetch<{ success: boolean; error?: string }>('/api/channels/binding', {
+        const result = await hostApiFetch<{ success: boolean; error?: string; refresh?: ChannelRefreshResult }>('/api/channels/binding', {
           method: 'DELETE',
           body: JSON.stringify({ channelType, accountId }),
         });
+        refresh = result.refresh;
       } else {
-        await hostApiFetch<{ success: boolean; error?: string }>('/api/channels/binding', {
+        const result = await hostApiFetch<{ success: boolean; error?: string; refresh?: ChannelRefreshResult }>('/api/channels/binding', {
           method: 'PUT',
           body: JSON.stringify({ channelType, accountId, agentId }),
         });
+        refresh = result.refresh;
       }
-      await fetchPageData();
-      toast.success(t('toast.bindingUpdated'));
+      toast.success(refresh?.mode === 'restart' || refresh?.mode === 'reload'
+        ? t('toast.bindingRefreshQueued')
+        : t('toast.bindingUpdated'));
+      await fetchPageData({ configOnly: true, forceAgentsRefresh: true });
+      scheduleConvergenceRefresh();
     } catch (bindError) {
       toast.error(t('toast.configFailed', { error: String(bindError) }));
     }

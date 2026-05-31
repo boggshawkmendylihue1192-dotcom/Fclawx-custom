@@ -607,7 +607,7 @@ function upsertBindingsForChannel(
     if (normalizedAccountId) {
       match.accountId = normalizedAccountId;
     }
-    nextBindings.push({ agentId, match });
+    nextBindings.push({ type: 'route', agentId, match });
   }
 
   return nextBindings.length > 0 ? nextBindings : undefined;
@@ -1029,6 +1029,54 @@ function isValidModelRef(modelRef: string): boolean {
   return firstSlash > 0 && firstSlash < modelRef.length - 1;
 }
 
+function splitModelRef(modelRef: string): { provider: string; modelId: string } | null {
+  const firstSlash = modelRef.indexOf('/');
+  if (firstSlash <= 0 || firstSlash >= modelRef.length - 1) return null;
+  return {
+    provider: modelRef.slice(0, firstSlash),
+    modelId: modelRef.slice(firstSlash + 1),
+  };
+}
+
+function isRegisteredProviderModel(config: AgentConfigDocument, modelRef: string): boolean {
+  const parsed = splitModelRef(modelRef);
+  if (!parsed) return false;
+  const models = config.models && typeof config.models === 'object' && !Array.isArray(config.models)
+    ? config.models as Record<string, unknown>
+    : {};
+  const providers = models.providers && typeof models.providers === 'object' && !Array.isArray(models.providers)
+    ? models.providers as Record<string, unknown>
+    : {};
+  const providerConfig = providers[parsed.provider];
+  if (!providerConfig || typeof providerConfig !== 'object' || Array.isArray(providerConfig)) {
+    return false;
+  }
+  const providerModels = (providerConfig as Record<string, unknown>).models;
+  if (!Array.isArray(providerModels)) {
+    return true;
+  }
+  return providerModels.some((entry) => {
+    if (typeof entry === 'string') return entry === parsed.modelId;
+    return Boolean(
+      entry
+      && typeof entry === 'object'
+      && !Array.isArray(entry)
+      && (entry as Record<string, unknown>).id === parsed.modelId
+    );
+  });
+}
+
+function assertRegisteredProviderModel(config: AgentConfigDocument, modelRef: string): void {
+  if (!isRegisteredProviderModel(config, modelRef)) {
+    const parsed = splitModelRef(modelRef);
+    throw new Error(
+      parsed
+        ? `Model "${modelRef}" is not registered. Configure provider "${parsed.provider}" and add model "${parsed.modelId}" before selecting it.`
+        : 'modelRef must be in "provider/model" format',
+    );
+  }
+}
+
 function ensureAllowedModel(defaults: AgentDefaultsConfig, modelRef: string): void {
   const existingModels = defaults.models && typeof defaults.models === 'object' && !Array.isArray(defaults.models)
     ? defaults.models
@@ -1059,6 +1107,7 @@ export async function updateAgentModel(agentId: string, modelRef: string | null)
       if (!isValidModelRef(normalizedModelRef)) {
         throw new Error('modelRef must be in "provider/model" format');
       }
+      assertRegisteredProviderModel(config, normalizedModelRef);
       nextEntry.model = { primary: normalizedModelRef };
       const defaults = (agentsConfig.defaults && typeof agentsConfig.defaults === 'object'
         ? { ...agentsConfig.defaults }
@@ -1090,6 +1139,7 @@ export async function ensureModelAllowed(modelRef: string): Promise<AgentsSnapsh
     }
 
     const config = await readOpenClawConfig() as AgentConfigDocument;
+    assertRegisteredProviderModel(config, normalizedModelRef);
     const { agentsConfig } = normalizeAgentsConfig(config);
     const defaults = (agentsConfig.defaults && typeof agentsConfig.defaults === 'object'
       ? { ...agentsConfig.defaults }

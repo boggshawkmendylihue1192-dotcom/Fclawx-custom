@@ -242,12 +242,17 @@ async function awaitWeChatQrLogin(
   }
 }
 
-function scheduleGatewayChannelRestart(ctx: HostApiContext, reason: string): void {
+type GatewayChannelRefreshResult = {
+  mode: 'none' | 'reload' | 'restart';
+  reason: string;
+};
+
+function scheduleGatewayChannelRestart(ctx: HostApiContext, reason: string): GatewayChannelRefreshResult {
   if (ctx.gatewayManager.getStatus().state === 'stopped') {
-    return;
+    return { mode: 'none', reason };
   }
   ctx.gatewayManager.debouncedRestart();
-  void reason;
+  return { mode: 'restart', reason };
 }
 
 // Plugin-based channels require a full Gateway process restart to properly
@@ -265,18 +270,17 @@ function scheduleGatewayChannelSaveRefresh(
   ctx: HostApiContext,
   channelType: string,
   reason: string,
-): void {
+): GatewayChannelRefreshResult {
   const storedChannelType = resolveStoredChannelType(channelType);
   if (ctx.gatewayManager.getStatus().state === 'stopped') {
-    return;
+    return { mode: 'none', reason };
   }
   if (FORCE_RESTART_CHANNELS.has(storedChannelType)) {
     ctx.gatewayManager.debouncedRestart(150);
-    void reason;
-    return;
+    return { mode: 'restart', reason };
   }
   ctx.gatewayManager.debouncedReload(150);
-  void reason;
+  return { mode: 'reload', reason };
 }
 
 function toComparableConfig(input: Record<string, unknown>): Record<string, string> {
@@ -471,6 +475,40 @@ function buildGatewayStatusSnapshot(status: GatewayChannelStatusPayload | null):
     .join(', ');
 }
 
+type RecentChannelIssue = {
+  lastError?: string;
+  statusReason?: string;
+  seenAt?: number;
+};
+
+function parseLogTimestamp(line: string): number | null {
+  const match = line.match(/^\[(\d{4}-\d{2}-\d{2}T[^\]]+)\]/);
+  if (!match) return null;
+  const timestamp = Date.parse(match[1]);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+async function getRecentChannelIssues(now = Date.now()): Promise<Record<string, RecentChannelIssue>> {
+  try {
+    const tail = await logger.readLogFile(500);
+    const issues: Record<string, RecentChannelIssue> = {};
+    for (const line of tail.split(/\r?\n/)) {
+      const seenAt = parseLogTimestamp(line) ?? now;
+      if (now - seenAt > 2 * 60 * 60 * 1000) continue;
+      if (line.includes('[openclaw-weixin]') && line.includes('session expired')) {
+        issues[OPENCLAW_WECHAT_CHANNEL_TYPE] = {
+          lastError: '微信登录会话已过期，请重新添加或重新登录该账号。',
+          statusReason: 'wechat_session_expired',
+          seenAt,
+        };
+      }
+    }
+    return issues;
+  } catch {
+    return {};
+  }
+}
+
 function shouldIncludeRuntimeAccountId(
   accountId: string,
   configuredAccountIds: Set<string>,
@@ -570,6 +608,7 @@ export async function buildChannelAccountsView(
   });
   const gatewayHealthState = gatewayHealthStateForChannels(gatewayHealth.state);
   const effectiveGatewayHealthState = skipRuntime ? undefined : gatewayHealthState;
+  const recentChannelIssues = skipRuntime ? {} : await getRecentChannelIssues();
 
   const channelTypes = new Set<string>([
     ...configuredChannels,
@@ -584,6 +623,7 @@ export async function buildChannelAccountsView(
     const configuredAccountIdSet = new Set(channelAccountsFromConfig);
     const hasLocalConfig = configuredChannels.includes(rawChannelType) || Boolean(configuredAccounts[rawChannelType]);
     const channelSection = openClawConfig.channels?.[rawChannelType];
+    const recentChannelIssue = recentChannelIssues[rawChannelType];
     const channelSummary =
       (gatewayStatus?.channels?.[rawChannelType] as { error?: string; lastError?: string } | undefined) ?? undefined;
     const sortedConfigAccountIds = [...channelAccountsFromConfig].sort((left, right) => {
@@ -619,9 +659,13 @@ export async function buildChannelAccountsView(
     const accounts: ChannelAccountView[] = accountIds.map((accountId) => {
       const runtime = runtimeAccounts.find((item) => item.accountId === accountId);
       const runtimeSnapshot: ChannelRuntimeAccountSnapshot = runtime ?? {};
-      const status = computeChannelRuntimeStatus(runtimeSnapshot, {
-        gatewayHealthState: effectiveGatewayHealthState,
-      });
+      const recentIssue = recentChannelIssues[rawChannelType];
+      const issueLastError = recentIssue?.lastError;
+      const status = issueLastError
+        ? 'error'
+        : computeChannelRuntimeStatus(runtimeSnapshot, {
+          gatewayHealthState: effectiveGatewayHealthState,
+        });
       return {
         accountId,
         name: runtime?.name || accountId,
@@ -629,12 +673,12 @@ export async function buildChannelAccountsView(
         connected: runtime?.connected === true,
         running: runtime?.running === true,
         linked: runtime?.linked === true,
-        lastError: typeof runtime?.lastError === 'string' ? runtime.lastError : undefined,
+        lastError: typeof runtime?.lastError === 'string' ? runtime.lastError : issueLastError,
         status,
         statusReason: status === 'degraded'
           ? overlayStatusReason(gatewayHealth, 'gateway_degraded')
           : status === 'error'
-            ? 'runtime_error'
+            ? (recentIssue?.statusReason || 'runtime_error')
             : undefined,
         isDefault: accountId === defaultAccountId,
         agentId: agentsSnapshot.channelAccountOwners[`${rawChannelType}:${accountId}`],
@@ -670,6 +714,8 @@ export async function buildChannelAccountsView(
       status: groupStatus,
       statusReason: !gatewayStatus && !skipRuntime && ctx.gatewayManager.getStatus().state === 'running'
         ? 'channels_status_timeout'
+        : recentChannelIssue?.statusReason
+          ? recentChannelIssue.statusReason
         : groupStatus === 'degraded' && effectiveGatewayHealthState
           ? overlayStatusReason(gatewayHealth, 'gateway_degraded')
         : undefined,
@@ -1315,8 +1361,8 @@ export async function handleChannelRoutes(
         return true;
       }
       await setChannelDefaultAccount(body.channelType, body.accountId);
-      scheduleGatewayChannelSaveRefresh(ctx, body.channelType, `channel:setDefaultAccount:${body.channelType}`);
-      sendJson(res, 200, { success: true });
+      const refresh = scheduleGatewayChannelSaveRefresh(ctx, body.channelType, `channel:setDefaultAccount:${body.channelType}`);
+      sendJson(res, 200, { success: true, refresh });
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
     }
@@ -1339,8 +1385,8 @@ export async function handleChannelRoutes(
         await migrateLegacyChannelWideBinding(storedChannelType);
       }
       await assignChannelAccountToAgent(body.agentId, storedChannelType, body.accountId);
-      scheduleGatewayChannelSaveRefresh(ctx, body.channelType, `channel:setBinding:${body.channelType}`);
-      sendJson(res, 200, { success: true });
+      const refresh = scheduleGatewayChannelSaveRefresh(ctx, body.channelType, `channel:setBinding:${body.channelType}`);
+      sendJson(res, 200, { success: true, refresh });
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
     }
@@ -1355,8 +1401,8 @@ export async function handleChannelRoutes(
         return true;
       }
       await clearChannelBinding(resolveStoredChannelType(body.channelType), body.accountId);
-      scheduleGatewayChannelSaveRefresh(ctx, body.channelType, `channel:clearBinding:${body.channelType}`);
-      sendJson(res, 200, { success: true });
+      const refresh = scheduleGatewayChannelSaveRefresh(ctx, body.channelType, `channel:clearBinding:${body.channelType}`);
+      sendJson(res, 200, { success: true, refresh });
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
     }

@@ -30,6 +30,7 @@
         "restartManual": "Please restart the gateway manually",
         "configFailed": "Configuration failed: {{error}}",
         "bindingUpdated": "Account binding updated",
+        "bindingRefreshQueued": "Binding saved. Gateway is applying the channel route...",
         "defaultUpdated": "Default account updated",
         "accountDeleted": "Account deleted",
         "channelDeleted": "Channel deleted"
@@ -112,7 +113,8 @@
             "rpc_timeout": "Recent Gateway RPC calls timed out.",
             "gateway_not_running": "Gateway is not running.",
             "gateway_error": "Gateway is in an error state.",
-            "runtime_error": "Channel runtime reported an error."
+            "runtime_error": "Channel runtime reported an error.",
+            "wechat_session_expired": "WeChat login session expired. Reconnect this account."
         },
         "restartGateway": "Restart Gateway",
         "copyDiagnostics": "Copy Diagnostics",
