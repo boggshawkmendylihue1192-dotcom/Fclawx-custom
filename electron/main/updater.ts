@@ -37,12 +37,38 @@ function detectChannel(version: string): string {
   return match ? match[1] : 'latest';
 }
 
+function compareVersions(a: string, b: string): number {
+  const parse = (version: string) =>
+    version
+      .replace(/^v/i, '')
+      .split('-', 1)[0]
+      .split('.')
+      .map((part) => Number.parseInt(part, 10) || 0);
+  const left = parse(a);
+  const right = parse(b);
+  const length = Math.max(left.length, right.length);
+
+  for (let index = 0; index < length; index++) {
+    const diff = (left[index] || 0) - (right[index] || 0);
+    if (diff !== 0) return diff > 0 ? 1 : -1;
+  }
+
+  return 0;
+}
+
+function isNewerVersion(candidate: string | undefined, current: string | undefined): boolean {
+  if (!candidate || !current) return false;
+  return compareVersions(candidate, current) > 0;
+}
+
 export class AppUpdater extends EventEmitter {
   private mainWindow: BrowserWindow | null = null;
   private status: UpdateStatus = { status: 'idle' };
   private autoInstallTimer: NodeJS.Timeout | null = null;
   private installTimer: NodeJS.Timeout | null = null;
   private autoInstallCountdown = 0;
+  private downloadedVersion: string | null = null;
+  private installAfterLatestDownload = false;
 
   /** Delay (in seconds) before auto-installing a downloaded update. */
   private static readonly AUTO_INSTALL_DELAY_SECONDS = 5;
@@ -101,6 +127,7 @@ export class AppUpdater extends EventEmitter {
     });
 
     autoUpdater.on('update-available', (info: UpdateInfo) => {
+      this.downloadedVersion = null;
       this.updateStatus({ status: 'available', info });
       this.emit('update-available', info);
     });
@@ -116,8 +143,14 @@ export class AppUpdater extends EventEmitter {
     });
 
     autoUpdater.on('update-downloaded', (event: UpdateDownloadedEvent) => {
+      this.downloadedVersion = event.version;
       this.updateStatus({ status: 'downloaded', info: event });
       this.emit('update-downloaded', event);
+
+      if (this.installAfterLatestDownload) {
+        this.installAfterLatestDownload = false;
+        this.scheduleInstall();
+      }
     });
 
     autoUpdater.on('error', (error: Error) => {
@@ -189,6 +222,13 @@ export class AppUpdater extends EventEmitter {
    */
   async downloadUpdate(): Promise<void> {
     try {
+      await this.checkForUpdates();
+
+      if (this.status.status !== 'available') {
+        logger.info('[Updater] Download skipped because no newer update is available');
+        return;
+      }
+
       await autoUpdater.downloadUpdate();
     } catch (error) {
       logger.error('[Updater] Download update failed:', error);
@@ -207,6 +247,28 @@ export class AppUpdater extends EventEmitter {
    * BEFORE calling quitAndInstall(). This lets the native quit flow close
    * the window cleanly while ShipIt runs independently to replace the app.
    */
+  private async ensureLatestDownloadedBeforeInstall(): Promise<boolean> {
+    const readyVersion = this.downloadedVersion || this.status.info?.version;
+
+    try {
+      const latest = await this.checkForUpdates();
+
+      if (latest?.version && (!readyVersion || isNewerVersion(latest.version, readyVersion))) {
+        logger.info(
+          `[Updater] Downloaded update ${readyVersion || 'unknown'} is stale; downloading latest ${latest.version}`
+        );
+        this.installAfterLatestDownload = true;
+        await autoUpdater.downloadUpdate();
+        return false;
+      }
+    } catch (error) {
+      logger.warn('[Updater] Latest-version check before install failed; installing downloaded update:', error);
+      this.updateStatus({ status: 'downloaded', info: this.status.info });
+    }
+
+    return true;
+  }
+
   quitAndInstall(): void {
     logger.info('[Updater] quitAndInstall called');
     this.updateStatus({ status: 'installing', info: this.status.info });
@@ -223,10 +285,15 @@ export class AppUpdater extends EventEmitter {
    * Schedule installation on the next tick so the renderer can paint the
    * "installing" state before Electron begins the quit/install flow.
    */
-  scheduleInstall(): void {
+  async scheduleInstall(): Promise<void> {
     if (this.installTimer) return;
 
     logger.info('[Updater] scheduleInstall called');
+    this.updateStatus({ status: 'checking', info: this.status.info });
+
+    const canInstallNow = await this.ensureLatestDownloadedBeforeInstall();
+    if (!canInstallNow) return;
+
     this.updateStatus({ status: 'installing', info: this.status.info });
 
     this.installTimer = setTimeout(() => {
@@ -250,7 +317,10 @@ export class AppUpdater extends EventEmitter {
 
       if (this.autoInstallCountdown <= 0) {
         this.clearAutoInstallTimer();
-        this.quitAndInstall();
+        this.scheduleInstall().catch((error) => {
+          logger.error('[Updater] Auto-install failed:', error);
+          this.updateStatus({ status: 'error', error: (error as Error).message || String(error) });
+        });
       }
     }, 1000);
   }
@@ -336,7 +406,7 @@ export function registerUpdateHandlers(
 
   // Install update and restart
   ipcMain.handle('update:install', () => {
-    updater.scheduleInstall();
+    void updater.scheduleInstall();
     return { success: true };
   });
 
