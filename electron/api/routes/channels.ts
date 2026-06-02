@@ -509,6 +509,28 @@ async function getRecentChannelIssues(now = Date.now()): Promise<Record<string, 
   }
 }
 
+function shouldApplyRecentChannelIssue(
+  runtime: ChannelRuntimeAccountSnapshot,
+  issue: RecentChannelIssue | undefined,
+): boolean {
+  if (!issue?.lastError) {
+    return false;
+  }
+
+  // Runtime state is fresher than the log overlay. If the adapter is already
+  // alive again and has no explicit runtime error, do not keep showing an old
+  // "session expired" log line after the user reconnects.
+  const hasLiveRuntime =
+    runtime.connected === true
+    || runtime.running === true
+    || runtime.linked === true
+    || runtime.probe?.ok === true;
+  const hasRuntimeError =
+    typeof runtime.lastError === 'string' && runtime.lastError.trim().length > 0;
+
+  return !hasLiveRuntime || hasRuntimeError;
+}
+
 function shouldIncludeRuntimeAccountId(
   accountId: string,
   configuredAccountIds: Set<string>,
@@ -660,7 +682,8 @@ export async function buildChannelAccountsView(
       const runtime = runtimeAccounts.find((item) => item.accountId === accountId);
       const runtimeSnapshot: ChannelRuntimeAccountSnapshot = runtime ?? {};
       const recentIssue = recentChannelIssues[rawChannelType];
-      const issueLastError = recentIssue?.lastError;
+      const useRecentIssue = shouldApplyRecentChannelIssue(runtimeSnapshot, recentIssue);
+      const issueLastError = useRecentIssue ? recentIssue?.lastError : undefined;
       const status = issueLastError
         ? 'error'
         : computeChannelRuntimeStatus(runtimeSnapshot, {
@@ -678,7 +701,7 @@ export async function buildChannelAccountsView(
         statusReason: status === 'degraded'
           ? overlayStatusReason(gatewayHealth, 'gateway_degraded')
           : status === 'error'
-            ? (recentIssue?.statusReason || 'runtime_error')
+            ? (useRecentIssue ? recentIssue?.statusReason : undefined) || 'runtime_error'
             : undefined,
         isDefault: accountId === defaultAccountId,
         agentId: agentsSnapshot.channelAccountOwners[`${rawChannelType}:${accountId}`],
@@ -707,6 +730,9 @@ export async function buildChannelAccountsView(
         : pickChannelRuntimeStatus(visibleAccountSnapshots, channelSummary, {
           gatewayHealthState: effectiveGatewayHealthState,
         });
+    const activeRecentChannelIssue = accounts.some((account) => account.statusReason === recentChannelIssue?.statusReason)
+      ? recentChannelIssue
+      : undefined;
 
     channels.push({
       channelType: uiChannelType,
@@ -714,8 +740,8 @@ export async function buildChannelAccountsView(
       status: groupStatus,
       statusReason: !gatewayStatus && !skipRuntime && ctx.gatewayManager.getStatus().state === 'running'
         ? 'channels_status_timeout'
-        : recentChannelIssue?.statusReason
-          ? recentChannelIssue.statusReason
+        : activeRecentChannelIssue?.statusReason
+          ? activeRecentChannelIssue.statusReason
         : groupStatus === 'degraded' && effectiveGatewayHealthState
           ? overlayStatusReason(gatewayHealth, 'gateway_degraded')
         : undefined,

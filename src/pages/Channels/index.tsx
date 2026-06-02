@@ -125,6 +125,25 @@ function removeDeletedTarget(groups: ChannelGroupItem[], target: DeleteTarget): 
   return groups.filter((group) => group.channelType !== target.channelType);
 }
 
+function updateAccountAgentBindingLocal(
+  groups: ChannelGroupItem[],
+  channelType: string,
+  accountId: string,
+  agentId: string,
+): ChannelGroupItem[] {
+  return groups.map((group) => {
+    if (group.channelType !== channelType) return group;
+    return {
+      ...group,
+      accounts: group.accounts.map((account) =>
+        account.accountId === accountId
+          ? { ...account, agentId: agentId || undefined }
+          : account
+      ),
+    };
+  });
+}
+
 const DEFAULT_GATEWAY_HEALTH: GatewayHealthSummary = {
   state: 'healthy',
   reasons: [],
@@ -475,6 +494,16 @@ export function Channels() {
   }, [t]);
 
   const handleBindAgent = async (channelType: string, accountId: string, agentId: string) => {
+    const previousGroups = channelGroupsRef.current;
+    const previousAccount = previousGroups
+      .find((group) => group.channelType === channelType)
+      ?.accounts.find((account) => account.accountId === accountId);
+    if ((previousAccount?.agentId || '') === agentId) {
+      return;
+    }
+
+    setChannelGroups((prev) => updateAccountAgentBindingLocal(prev, channelType, accountId, agentId));
+
     try {
       let refresh: ChannelRefreshResult | undefined;
       if (!agentId) {
@@ -482,20 +511,27 @@ export function Channels() {
           method: 'DELETE',
           body: JSON.stringify({ channelType, accountId }),
         });
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to clear account binding');
+        }
         refresh = result.refresh;
       } else {
         const result = await hostApiFetch<{ success: boolean; error?: string; refresh?: ChannelRefreshResult }>('/api/channels/binding', {
           method: 'PUT',
           body: JSON.stringify({ channelType, accountId, agentId }),
         });
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to update account binding');
+        }
         refresh = result.refresh;
       }
       toast.success(refresh?.mode === 'restart' || refresh?.mode === 'reload'
         ? t('toast.bindingRefreshQueued')
         : t('toast.bindingUpdated'));
-      await fetchPageData({ configOnly: true, forceAgentsRefresh: true });
+      void fetchPageData({ configOnly: true, forceAgentsRefresh: true });
       scheduleConvergenceRefresh();
     } catch (bindError) {
+      setChannelGroups(previousGroups);
       toast.error(t('toast.configFailed', { error: String(bindError) }));
     }
   };
