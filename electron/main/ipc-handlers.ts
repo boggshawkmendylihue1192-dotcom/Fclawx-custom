@@ -3,9 +3,10 @@
  * Registers all IPC handlers for main-renderer communication
  */
 import { ipcMain, BrowserWindow, shell, dialog, app, nativeImage } from 'electron';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, extname, basename, resolve, sep, relative } from 'node:path';
+import { join, extname, basename, resolve, sep, relative, dirname } from 'node:path';
+import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import { GatewayManager } from '../gateway/manager';
 import { ClawHubService, ClawHubSearchParams, ClawHubInstallParams, ClawHubUninstallParams } from '../gateway/clawhub';
@@ -2222,6 +2223,81 @@ function registerAppHandlers(): void {
     app.relaunch();
     app.quit();
   });
+
+  ipcMain.handle('app:uninstall', async () => {
+    if (process.platform !== 'win32') {
+      return { success: false, error: '软件内卸载目前仅支持 Windows 安装包版本。' };
+    }
+
+    if (!app.isPackaged) {
+      return { success: false, error: '开发模式没有系统卸载器，请在已安装的软件版本中使用卸载。' };
+    }
+
+    const uninstallPath = resolveWindowsUninstallerPath();
+    if (!uninstallPath) {
+      return {
+        success: false,
+        error: '未找到卸载器。可从 Windows 设置 > 应用 > 已安装的应用 中卸载 ClawX。',
+      };
+    }
+
+    const result = await dialog.showMessageBox({
+      type: 'warning',
+      buttons: ['取消', '卸载'],
+      defaultId: 0,
+      cancelId: 0,
+      title: '卸载 ClawX',
+      message: '确定要卸载 ClawX 吗？',
+      detail: '将启动 Windows 卸载程序并关闭当前应用。用户配置、密钥和聊天数据默认保留，避免误删；如需清空数据，请在卸载后手动删除用户数据目录。',
+      noLink: true,
+    });
+
+    if (result.response !== 1) {
+      return { success: false, cancelled: true };
+    }
+
+    try {
+      const child = spawn(uninstallPath, [], {
+        cwd: dirname(uninstallPath),
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: false,
+      });
+      child.unref();
+      logger.info(`Started ClawX uninstaller: ${uninstallPath}`);
+      setTimeout(() => app.quit(), 250);
+      return { success: true, uninstallPath };
+    } catch (error) {
+      logger.error(`Failed to start ClawX uninstaller: ${String(error)}`);
+      return { success: false, error: String(error) };
+    }
+  });
+}
+
+function resolveWindowsUninstallerPath(): string | null {
+  const installDir = dirname(process.execPath);
+  const appName = app.getName();
+  const productName = 'ClawX';
+  const candidates = [
+    join(installDir, `Uninstall ${productName}.exe`),
+    join(installDir, `Uninstall ${appName}.exe`),
+    join(installDir, `${productName} Uninstaller.exe`),
+    join(installDir, `${appName} Uninstaller.exe`),
+    join(installDir, 'Uninstall.exe'),
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+
+  try {
+    return readdirSync(installDir)
+      .filter((name) => /^Uninstall.*\.exe$/i.test(name) || /Uninstaller\.exe$/i.test(name))
+      .map((name) => join(installDir, name))
+      .find((candidate) => existsSync(candidate)) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function registerSettingsHandlers(gatewayManager: GatewayManager): void {

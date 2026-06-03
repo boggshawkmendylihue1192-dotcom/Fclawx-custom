@@ -12,6 +12,7 @@ import {
   Copy,
   FileText,
   Download,
+  Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -131,6 +132,7 @@ export function Settings() {
   const [wsDiagnosticEnabled, setWsDiagnosticEnabled] = useState(false);
   const [showTelemetryViewer, setShowTelemetryViewer] = useState(false);
   const [telemetryEntries, setTelemetryEntries] = useState<UiTelemetryEntry[]>([]);
+  const [uninstalling, setUninstalling] = useState(false);
 
   const isWindows = window.electron.platform === 'win32';
   const showCliTools = true;
@@ -307,6 +309,22 @@ export function Settings() {
       toast.success(t('developer.tokenCopied'));
     } catch (error) {
       toast.error(`Failed to copy token: ${String(error)}`);
+    }
+  };
+
+  const handleUninstallApp = async () => {
+    setUninstalling(true);
+    try {
+      const result = await invokeIpc<{ success: boolean; cancelled?: boolean; error?: string }>('app:uninstall');
+      if (result.cancelled) return;
+      if (!result.success) {
+        throw new Error(result.error || '启动卸载程序失败');
+      }
+      toast.success('已启动卸载程序');
+    } catch (error) {
+      toast.error(toUserMessage(error));
+    } finally {
+      setUninstalling(false);
     }
   };
 
@@ -1184,6 +1202,30 @@ export function Settings() {
                 >
                   {t('about.faq')}
                 </Button>
+              </div>
+              <div className="mt-6 rounded-xl border border-red-500/20 bg-red-500/5 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-red-600 dark:text-red-400">卸载软件</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      启动 Windows 卸载程序并关闭 ClawX。用户配置、密钥和聊天数据默认保留，避免误删。
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleUninstallApp}
+                    disabled={uninstalling}
+                  >
+                    {uninstalling ? (
+                      <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="mr-2 h-4 w-4" />
+                    )}
+                    卸载 ClawX
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
