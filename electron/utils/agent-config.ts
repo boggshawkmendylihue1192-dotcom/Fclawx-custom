@@ -7,7 +7,7 @@ import { withConfigLock } from './config-mutex';
 import { expandPath, getOpenClawConfigDir } from './paths';
 import * as logger from './logger';
 import { toUiChannelType } from './channel-alias';
-import { ensureClawXIdentityFile } from './openclaw-workspace';
+import { ensureClawXAgentIdentityFile, ensureClawXIdentityFile } from './openclaw-workspace';
 
 const MAIN_AGENT_ID = 'main';
 const MAIN_AGENT_NAME = 'Main Agent';
@@ -726,7 +726,11 @@ async function provisionAgentFilesystem(
   if (options?.inheritWorkspace && targetWorkspace !== sourceWorkspace) {
     await copyBootstrapFiles(sourceWorkspace, targetWorkspace);
   }
-  await ensureClawXIdentityFile(targetWorkspace, { createDir: true });
+  if (agent.id === MAIN_AGENT_ID) {
+    await ensureClawXIdentityFile(targetWorkspace, { createDir: true });
+  } else {
+    await ensureClawXAgentIdentityFile(targetWorkspace, agent, { createDir: true });
+  }
   if (targetAgentDir !== sourceAgentDir) {
     await copyRuntimeFiles(sourceAgentDir, targetAgentDir);
   }
@@ -943,7 +947,7 @@ export async function createAgent(
     await writeAgentToolPermissions(config, newAgent);
     await writeOpenClawConfig(config);
     logger.info('Created agent config entry', { agentId: nextId, inheritWorkspace: !!options?.inheritWorkspace });
-    return buildSnapshotFromConfig(config);
+    return await listAgentsSnapshot();
   });
 }
 

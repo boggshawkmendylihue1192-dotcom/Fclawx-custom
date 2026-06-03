@@ -22,6 +22,7 @@ import { handleKnowledgeRoutes } from './routes/knowledge';
 import { handleWebSearchRoutes } from './routes/web-search';
 import { handleDiagnosticsRoutes } from './routes/diagnostics';
 import { handleMediaRoutes } from './routes/media';
+import { handleRuntimeRoutes } from './routes/runtime';
 import { sendJson, setCorsHeaders, requireJsonContentType } from './route-utils';
 
 type RouteHandler = (
@@ -46,6 +47,7 @@ const coreRouteHandlers: RouteHandler[] = [
   handleWorkbenchRoutes,
   handleKnowledgeRoutes,
   handleWebSearchRoutes,
+  handleRuntimeRoutes,
   handleDiagnosticsRoutes,
   handleLogRoutes,
   handleUsageRoutes,

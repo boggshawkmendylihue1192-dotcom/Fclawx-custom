@@ -5,9 +5,11 @@ import {
   CheckCircle2,
   Clock,
   Copy,
+  Download,
   Gauge,
   Network,
   RefreshCw,
+  RotateCcw,
   Server,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -59,6 +61,41 @@ interface GatewayDiagnosticSnapshot {
 }
 
 type RuntimeLoadState = 'idle' | 'loading' | 'ready' | 'error';
+type RuntimeActionState = 'idle' | 'checking' | 'upgrading' | 'rollback';
+
+interface OpenClawRuntimeRef {
+  type: 'bundled' | 'user';
+  path: string;
+  version?: string;
+  activatedAt?: string;
+  usable: boolean;
+}
+
+interface OpenClawRuntimeStatus {
+  active: OpenClawRuntimeRef;
+  bundled: OpenClawRuntimeRef;
+  previous?: Omit<OpenClawRuntimeRef, 'usable'>;
+  statePath: string;
+  rootDir: string;
+  latestVersion?: string;
+  canRollback: boolean;
+}
+
+interface OpenClawRuntimeResponse {
+  success: boolean;
+  hint?: string;
+  status: OpenClawRuntimeStatus;
+  error?: string;
+}
+
+interface OpenClawRuntimeOperationResponse {
+  success: boolean;
+  status: OpenClawRuntimeStatus;
+  version?: string;
+  backupConfigPath?: string;
+  rolledBack?: boolean;
+  error?: string;
+}
 
 const CHANNEL_STATUS_LABELS: Record<ChannelAccountItem['status'], string> = {
   connected: '已连接',
@@ -131,6 +168,10 @@ function pickLatestLogLine(text: string | undefined): string {
     .map((line) => line.trim())
     .filter(Boolean);
   return lines.at(-1) ?? '暂无';
+}
+
+function formatRuntimeSource(type: OpenClawRuntimeRef['type']): string {
+  return type === 'user' ? '独立运行时' : 'ClawX 内置';
 }
 
 function summarizeUsage(entries: UsageHistoryEntry[]) {
@@ -322,15 +363,25 @@ export function Runtime() {
   const [loadState, setLoadState] = useState<RuntimeLoadState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState<OpenClawRuntimeStatus | null>(null);
+  const [runtimeHint, setRuntimeHint] = useState<string | null>(null);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [runtimeAction, setRuntimeAction] = useState<RuntimeActionState>('idle');
 
   const refresh = useCallback(async () => {
     setLoadState((current) => (current === 'ready' ? 'loading' : 'loading'));
     setError(null);
 
     try {
-      const [diagnostics, usage] = await Promise.all([
+      const [diagnostics, usage, runtime] = await Promise.all([
         hostApiFetch<unknown>('/api/diagnostics/gateway-snapshot'),
         hostApiFetch<UsageHistoryEntry[]>('/api/usage/recent-token-history?limit=120'),
+        hostApiFetch<OpenClawRuntimeResponse>('/api/runtime/openclaw').catch((runtimeFetchError) => ({
+          success: false,
+          error: runtimeFetchError instanceof Error ? runtimeFetchError.message : String(runtimeFetchError),
+          hint: undefined,
+          status: null as unknown as OpenClawRuntimeStatus,
+        })),
       ]);
 
       if (isGatewayDiagnosticSnapshot(diagnostics)) {
@@ -339,6 +390,13 @@ export function Runtime() {
         setSnapshot(null);
       }
       setUsageHistory(Array.isArray(usage) ? usage : []);
+      if (runtime.success && runtime.status) {
+        setRuntimeStatus(runtime.status);
+        setRuntimeHint(runtime.hint ?? null);
+        setRuntimeError(null);
+      } else {
+        setRuntimeError(runtime.error ?? 'OpenClaw 运行时状态读取失败');
+      }
       setLastUpdatedAt(Date.now());
       setLoadState('ready');
     } catch (err) {
@@ -397,6 +455,79 @@ export function Runtime() {
     }
   }, [channelCounts, gatewayReasons, gatewayStatus, healthState, runtimeFindings, snapshot, usageHistory]);
 
+  const checkRuntimeUpdate = useCallback(async () => {
+    setRuntimeAction('checking');
+    setRuntimeError(null);
+    try {
+      const result = await hostApiFetch<OpenClawRuntimeResponse>('/api/runtime/openclaw/check');
+      setRuntimeStatus(result.status);
+      setRuntimeHint(result.hint ?? null);
+      toast.success(result.status.latestVersion ? `OpenClaw 最新版本：${result.status.latestVersion}` : '已刷新 OpenClaw 版本信息');
+    } catch (checkError) {
+      const message = checkError instanceof Error ? checkError.message : String(checkError);
+      setRuntimeError(message);
+      toast.error(`检查失败：${message}`);
+    } finally {
+      setRuntimeAction('idle');
+    }
+  }, []);
+
+  const upgradeRuntime = useCallback(async () => {
+    if (!window.confirm('升级会先停止网关，备份配置，然后安装新的 OpenClaw 运行时。确认继续？')) return;
+    setRuntimeAction('upgrading');
+    setRuntimeError(null);
+    try {
+      const result = await hostApiFetch<OpenClawRuntimeOperationResponse>('/api/runtime/openclaw/upgrade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      setRuntimeStatus(result.status);
+      if (result.success) {
+        toast.success(`OpenClaw 已升级到 ${result.version ?? result.status.active.version ?? '新版本'}`);
+      } else {
+        const message = result.error ?? '升级失败，已尝试回滚';
+        setRuntimeError(message);
+        toast.error(message);
+      }
+      void refresh();
+    } catch (upgradeError) {
+      const message = upgradeError instanceof Error ? upgradeError.message : String(upgradeError);
+      setRuntimeError(message);
+      toast.error(`升级失败：${message}`);
+    } finally {
+      setRuntimeAction('idle');
+    }
+  }, [refresh]);
+
+  const rollbackRuntime = useCallback(async () => {
+    if (!window.confirm('确认回滚到上一套 OpenClaw 运行时？')) return;
+    setRuntimeAction('rollback');
+    setRuntimeError(null);
+    try {
+      const result = await hostApiFetch<OpenClawRuntimeOperationResponse>('/api/runtime/openclaw/rollback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      setRuntimeStatus(result.status);
+      if (result.success) {
+        toast.success(`已回滚到 ${result.version ?? result.status.active.version ?? '上一版本'}`);
+      } else {
+        const message = result.error ?? '回滚失败';
+        setRuntimeError(message);
+        toast.error(message);
+      }
+      void refresh();
+    } catch (rollbackError) {
+      const message = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+      setRuntimeError(message);
+      toast.error(`回滚失败：${message}`);
+    } finally {
+      setRuntimeAction('idle');
+    }
+  }, [refresh]);
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <div className="flex items-center justify-between border-b px-6 py-4">
@@ -424,6 +555,68 @@ export function Runtime() {
             {error}
           </div>
         )}
+
+        <Section title="OpenClaw 运行时升级" icon={Download} className="mb-4">
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
+            <div className="min-w-0 space-y-2 text-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={runtimeStatus?.active.usable ? 'success' : 'destructive'}>
+                  {runtimeStatus ? formatRuntimeSource(runtimeStatus.active.type) : '读取中'}
+                </Badge>
+                <span className="font-medium">
+                  当前：{runtimeStatus?.active.version ?? 'unknown'}
+                </span>
+                {runtimeStatus?.latestVersion && (
+                  <span className="text-muted-foreground">
+                    最新：{runtimeStatus.latestVersion}
+                  </span>
+                )}
+              </div>
+              <div className="break-all text-xs text-muted-foreground">
+                运行时路径：{runtimeStatus?.active.path ?? '暂未读取'}
+              </div>
+              <div className="break-all text-xs text-muted-foreground">
+                备份/回滚目录：{runtimeStatus?.rootDir ?? '暂未读取'}
+              </div>
+              {runtimeHint && (
+                <div className="text-xs text-muted-foreground">{runtimeHint}</div>
+              )}
+              {runtimeError && (
+                <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  {runtimeError}
+                </div>
+              )}
+            </div>
+            <div className="flex flex-wrap items-start gap-2 lg:justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void checkRuntimeUpdate()}
+                disabled={runtimeAction !== 'idle'}
+              >
+                <RefreshCw className={cn('mr-2 h-4 w-4', runtimeAction === 'checking' && 'animate-spin')} strokeWidth={2} />
+                检查 OpenClaw
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => void upgradeRuntime()}
+                disabled={runtimeAction !== 'idle'}
+              >
+                <Download className={cn('mr-2 h-4 w-4', runtimeAction === 'upgrading' && 'animate-pulse')} strokeWidth={2} />
+                升级运行时
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void rollbackRuntime()}
+                disabled={runtimeAction !== 'idle' || !runtimeStatus?.canRollback}
+              >
+                <RotateCcw className={cn('mr-2 h-4 w-4', runtimeAction === 'rollback' && 'animate-spin')} strokeWidth={2} />
+                回滚
+              </Button>
+            </div>
+          </div>
+        </Section>
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <MetricTile

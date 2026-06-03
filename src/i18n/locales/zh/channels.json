@@ -56,6 +56,8 @@
         "handledBy": "由 {{agent}} 处理",
         "bindingStatusLabel": "绑定状态：{{status}}",
         "connectionStatusLabel": "连接状态：{{status}}",
+        "senderIdentityNote": "回复会从同一个渠道账号发出，绑定只决定由哪个 Agent 处理。",
+        "handlerMissing": "未绑定时会使用默认 Agent",
         "bindingStatus": {
             "bound": "已绑定",
             "unbound": "未绑定"

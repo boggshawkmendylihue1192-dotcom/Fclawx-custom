@@ -101,6 +101,84 @@ export function getResourcesDir(): string {
   return join(__dirname, '../../resources');
 }
 
+export interface OpenClawRuntimeRef {
+  type: 'bundled' | 'user';
+  path: string;
+  version?: string;
+  platform?: string;
+  arch?: string;
+  activatedAt?: string;
+  backupConfigPath?: string;
+}
+
+export interface OpenClawRuntimeState {
+  active?: OpenClawRuntimeRef;
+  previous?: OpenClawRuntimeRef;
+  updatedAt?: string;
+}
+
+export function getOpenClawRuntimeRootDir(): string {
+  return join(getElectronApp().getPath('userData'), 'openclaw-runtime');
+}
+
+export function getOpenClawRuntimeStatePath(): string {
+  return join(getOpenClawRuntimeRootDir(), 'runtime-state.json');
+}
+
+export function getBundledOpenClawDir(): string {
+  if (getElectronApp().isPackaged) {
+    return join(process.resourcesPath, 'openclaw');
+  }
+  return join(__dirname, '../../node_modules/openclaw');
+}
+
+export function isOpenClawRuntimeDirUsable(dir: string): boolean {
+  return existsSync(join(dir, 'package.json')) && existsSync(join(dir, 'openclaw.mjs'));
+}
+
+function canUseUserOpenClawRuntime(): boolean {
+  return getElectronApp().isPackaged || process.env.CLAWX_ALLOW_USER_OPENCLAW_RUNTIME_IN_DEV === '1';
+}
+
+function isRuntimeRefCompatible(ref: OpenClawRuntimeRef): boolean {
+  if (ref.type !== 'user') return true;
+  if (!canUseUserOpenClawRuntime()) return false;
+  if (ref.platform && ref.platform !== process.platform) return false;
+  if (ref.arch && ref.arch !== process.arch) return false;
+  return true;
+}
+
+export function isOpenClawRuntimeRefUsable(ref: OpenClawRuntimeRef): boolean {
+  return isRuntimeRefCompatible(ref) && isOpenClawRuntimeDirUsable(ref.path);
+}
+
+export function readOpenClawRuntimeState(): OpenClawRuntimeState {
+  const statePath = getOpenClawRuntimeStatePath();
+  try {
+    if (!existsSync(statePath)) return {};
+    const parsed = JSON.parse(readFileSync(statePath, 'utf-8')) as OpenClawRuntimeState;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function getActiveOpenClawRuntime(): OpenClawRuntimeRef {
+  const state = readOpenClawRuntimeState();
+  const active = state.active;
+  if (
+    active?.type === 'user'
+    && active.path
+    && isOpenClawRuntimeRefUsable(active)
+  ) {
+    return active;
+  }
+  return {
+    type: 'bundled',
+    path: getBundledOpenClawDir(),
+  };
+}
+
 /**
  * Get preload script path
  */
@@ -114,11 +192,7 @@ export function getPreloadPath(): string {
  * - Development: from node_modules/openclaw
  */
 export function getOpenClawDir(): string {
-  if (getElectronApp().isPackaged) {
-    return join(process.resourcesPath, 'openclaw');
-  }
-  // Development: use node_modules/openclaw
-  return join(__dirname, '../../node_modules/openclaw');
+  return getActiveOpenClawRuntime().path;
 }
 
 /**

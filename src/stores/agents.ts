@@ -43,7 +43,14 @@ function applySnapshot(snapshot: AgentsSnapshot | undefined) {
   } : {};
 }
 
-export const useAgentsStore = create<AgentsState>((set) => ({
+function assertSuccessfulSnapshot(snapshot: (AgentsSnapshot & { success?: boolean; error?: string }) | undefined): AgentsSnapshot {
+  if (!snapshot || snapshot.success === false) {
+    throw new Error(snapshot?.error || 'Failed to load agents');
+  }
+  return snapshot;
+}
+
+export const useAgentsStore = create<AgentsState>((set, get) => ({
   agents: [],
   defaultAgentId: 'main',
   defaultModelRef: null,
@@ -58,7 +65,7 @@ export const useAgentsStore = create<AgentsState>((set) => ({
     try {
       const snapshot = await hostApiFetch<AgentsSnapshot & { success?: boolean }>('/api/agents');
       set({
-        ...applySnapshot(snapshot),
+        ...applySnapshot(assertSuccessfulSnapshot(snapshot)),
         loading: false,
       });
     } catch (error) {
@@ -71,9 +78,11 @@ export const useAgentsStore = create<AgentsState>((set) => ({
     try {
       const snapshot = await hostApiFetch<AgentsSnapshot & { success?: boolean }>('/api/agents', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, ...options }),
       });
-      set(applySnapshot(snapshot));
+      set(applySnapshot(assertSuccessfulSnapshot(snapshot)));
+      await get().fetchAgents();
     } catch (error) {
       set({ error: String(error) });
       throw error;
@@ -87,10 +96,11 @@ export const useAgentsStore = create<AgentsState>((set) => ({
         `/api/agents/${encodeURIComponent(agentId)}`,
         {
           method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name }),
         }
       );
-      set(applySnapshot(snapshot));
+      set(applySnapshot(assertSuccessfulSnapshot(snapshot)));
     } catch (error) {
       set({ error: String(error) });
       throw error;
@@ -104,10 +114,11 @@ export const useAgentsStore = create<AgentsState>((set) => ({
         `/api/agents/${encodeURIComponent(agentId)}`,
         {
           method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(profile),
         }
       );
-      set(applySnapshot(snapshot));
+      set(applySnapshot(assertSuccessfulSnapshot(snapshot)));
     } catch (error) {
       set({ error: String(error) });
       throw error;
@@ -121,10 +132,11 @@ export const useAgentsStore = create<AgentsState>((set) => ({
         `/api/agents/${encodeURIComponent(agentId)}/model`,
         {
           method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ modelRef }),
         }
       );
-      set(applySnapshot(snapshot));
+      set(applySnapshot(assertSuccessfulSnapshot(snapshot)));
     } catch (error) {
       set({ error: String(error) });
       throw error;
@@ -138,7 +150,7 @@ export const useAgentsStore = create<AgentsState>((set) => ({
         `/api/agents/${encodeURIComponent(agentId)}`,
         { method: 'DELETE' }
       );
-      set(applySnapshot(snapshot));
+      set(applySnapshot(assertSuccessfulSnapshot(snapshot)));
     } catch (error) {
       set({ error: String(error) });
       throw error;
@@ -152,7 +164,7 @@ export const useAgentsStore = create<AgentsState>((set) => ({
         `/api/agents/${encodeURIComponent(agentId)}/channels/${encodeURIComponent(channelType)}`,
         { method: 'PUT' }
       );
-      set(applySnapshot(snapshot));
+      set(applySnapshot(assertSuccessfulSnapshot(snapshot)));
     } catch (error) {
       set({ error: String(error) });
       throw error;
@@ -166,7 +178,7 @@ export const useAgentsStore = create<AgentsState>((set) => ({
         `/api/agents/${encodeURIComponent(agentId)}/channels/${encodeURIComponent(channelType)}`,
         { method: 'DELETE' }
       );
-      set(applySnapshot(snapshot));
+      set(applySnapshot(assertSuccessfulSnapshot(snapshot)));
     } catch (error) {
       set({ error: String(error) });
       throw error;

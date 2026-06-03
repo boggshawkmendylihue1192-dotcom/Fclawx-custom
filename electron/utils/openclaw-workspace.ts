@@ -43,6 +43,31 @@ export function buildDefaultClawXIdentityContent(): string {
   ].join('\n');
 }
 
+export function buildClawXAgentIdentityContent(params: { agentId: string; name: string; description?: string }): string {
+  const name = params.name.trim() || params.agentId;
+  const description = params.description?.trim();
+  return [
+    `# IDENTITY.md - ${name}`,
+    '',
+    `- **Name:** ${name}`,
+    `- **Agent ID:** ${params.agentId}`,
+    '- **Creature:** OpenClaw agent',
+    description ? `- **Role:** ${description}` : '- **Role:** configured ClawX/OpenClaw channel agent',
+    '- **Vibe:** concise, capable, and practical',
+    '- **Avatar:**',
+    '',
+    `When asked who you are, answer as ${name}. Do not identify yourself as ClawX unless the user asks about the desktop application.`,
+    '',
+  ].join('\n');
+}
+
+export function isClawXDefaultIdentity(content: string): boolean {
+  const normalized = content.replace(/\r\n/g, '\n');
+  return normalized.includes('# IDENTITY.md - ClawX')
+    && normalized.includes('- **Name:** ClawX')
+    && normalized.includes('ClawX uses a default desktop identity');
+}
+
 export function isOpenClawIdentityTemplate(content: string): boolean {
   const normalized = content.replace(/\r\n/g, '\n');
   return normalized.includes('# IDENTITY.md - Who Am I?')
@@ -109,10 +134,46 @@ export async function ensureClawXIdentityFile(
   }
 }
 
+export async function ensureClawXAgentIdentityFile(
+  workspaceDir: string,
+  agent: { id: string; name?: string; description?: string },
+  options: { createDir?: boolean } = {},
+): Promise<void> {
+  const resolvedWorkspaceDir = resolve(workspaceDir);
+  if (options.createDir) {
+    await mkdir(resolvedWorkspaceDir, { recursive: true });
+  } else if (!(await fileExists(resolvedWorkspaceDir))) {
+    return;
+  }
+
+  const identityPath = join(resolvedWorkspaceDir, DEFAULT_IDENTITY_FILENAME);
+  const agentIdentity = buildClawXAgentIdentityContent({
+    agentId: agent.id,
+    name: agent.name || agent.id,
+    description: agent.description,
+  });
+
+  let existing: string;
+  try {
+    existing = await readFile(identityPath, 'utf-8');
+  } catch {
+    await writeFile(identityPath, agentIdentity, 'utf-8');
+    return;
+  }
+
+  if (isOpenClawIdentityTemplate(existing) || isClawXDefaultIdentity(existing)) {
+    await writeFile(identityPath, agentIdentity, 'utf-8');
+  }
+}
+
 export async function ensureClawXDefaultIdentity(): Promise<void> {
   const workspaceDirs = await resolveAllWorkspaceDirs();
-  for (const { dir: workspaceDir, waitForGatewaySeed } of workspaceDirs) {
-    await ensureClawXIdentityFile(workspaceDir, { createDir: waitForGatewaySeed });
+  for (const { dir: workspaceDir, waitForGatewaySeed, agent } of workspaceDirs) {
+    if (agent && agent.id !== 'main') {
+      await ensureClawXAgentIdentityFile(workspaceDir, agent, { createDir: waitForGatewaySeed });
+    } else {
+      await ensureClawXIdentityFile(workspaceDir, { createDir: waitForGatewaySeed });
+    }
   }
 }
 
@@ -197,6 +258,11 @@ export function stripFirstRunSection(content: string): string {
 
 type WorkspaceDir = {
   dir: string;
+  agent?: {
+    id: string;
+    name?: string;
+    description?: string;
+  };
   /**
    * Only the default workspace is expected to be seeded during Gateway startup.
    * Other agent workspaces may remain empty until that agent is actually used,
@@ -211,11 +277,12 @@ type WorkspaceDir = {
 async function resolveAllWorkspaceDirs(): Promise<WorkspaceDir[]> {
   const openclawDir = join(homedir(), '.openclaw');
   const dirs = new Map<string, WorkspaceDir>();
-  const addDir = (dir: string, waitForGatewaySeed: boolean) => {
+  const addDir = (dir: string, waitForGatewaySeed: boolean, agent?: WorkspaceDir['agent']) => {
     const existing = dirs.get(dir);
     dirs.set(dir, {
       dir,
       waitForGatewaySeed: waitForGatewaySeed || existing?.waitForGatewaySeed === true,
+      agent: agent ?? existing?.agent,
     });
   };
 
@@ -227,7 +294,7 @@ async function resolveAllWorkspaceDirs(): Promise<WorkspaceDir[]> {
       const defaultWs = config?.agents?.defaults?.workspace;
       let hasDefaultWorkspace = false;
       if (typeof defaultWs === 'string' && defaultWs.trim()) {
-        addDir(defaultWs.replace(/^~/, homedir()), true);
+        addDir(defaultWs.replace(/^~/, homedir()), true, { id: 'main', name: 'Main' });
         hasDefaultWorkspace = true;
       }
 
@@ -238,7 +305,18 @@ async function resolveAllWorkspaceDirs(): Promise<WorkspaceDir[]> {
           if (typeof ws === 'string' && ws.trim()) {
             const isMainDefault =
               agent?.default === true || (agent?.id === 'main' && !hasDefaultWorkspace);
-            addDir(ws.replace(/^~/, homedir()), isMainDefault);
+            const agentId = typeof agent?.id === 'string' && agent.id.trim() ? agent.id.trim() : undefined;
+            addDir(
+              ws.replace(/^~/, homedir()),
+              isMainDefault,
+              agentId
+                ? {
+                  id: agentId,
+                  name: typeof agent?.name === 'string' ? agent.name : undefined,
+                  description: typeof agent?.description === 'string' ? agent.description : undefined,
+                }
+                : undefined,
+            );
           }
         }
       }
@@ -254,7 +332,7 @@ async function resolveAllWorkspaceDirs(): Promise<WorkspaceDir[]> {
   // explicitly declared in openclaw.json should be seeded.
 
   if (dirs.size === 0) {
-    addDir(join(openclawDir, 'workspace'), true);
+    addDir(join(openclawDir, 'workspace'), true, { id: 'main', name: 'Main' });
   }
 
   return [...dirs.values()];

@@ -571,9 +571,15 @@ type DirectoryEntry = {
 
 const CHANNEL_TARGET_CACHE_TTL_MS = 60_000;
 const CHANNEL_TARGET_CACHE_ENABLED = process.env.VITEST !== 'true';
+const CHANNEL_STATUS_CACHE_TTL_MS = 5 * 60_000;
 const channelTargetCache = new Map<string, { expiresAt: number; targets: ChannelTargetOptionView[] }>();
 let lastChannelsStatusOkAt: number | undefined;
 let lastChannelsStatusFailureAt: number | undefined;
+let consecutiveChannelsStatusFailures = 0;
+let lastGatewayChannelStatusCache: {
+  capturedAt: number;
+  payload: GatewayChannelStatusPayload;
+} | null = null;
 
 export async function buildChannelAccountsView(
   ctx: HostApiContext,
@@ -591,6 +597,8 @@ export async function buildChannelAccountsView(
   ]);
 
   let gatewayStatus: GatewayChannelStatusPayload | null = null;
+  let channelsStatusHardFailure = false;
+  let usedCachedGatewayStatus = false;
   if (!skipRuntime) {
     try {
       // probe=false uses cached runtime state (lighter); probe=true forces
@@ -601,19 +609,40 @@ export async function buildChannelAccountsView(
       gatewayStatus = await ctx.gatewayManager.rpc<GatewayChannelStatusPayload>(
         'channels.status',
         { probe },
-        probe ? 5000 : 8000,
+        probe ? 15000 : 10000,
       );
       lastChannelsStatusOkAt = Date.now();
+      consecutiveChannelsStatusFailures = 0;
+      lastGatewayChannelStatusCache = {
+        capturedAt: lastChannelsStatusOkAt,
+        payload: gatewayStatus,
+      };
       logger.info(
         `[channels.accounts] channels.status probe=${probe ? '1' : '0'} elapsedMs=${Date.now() - rpcStartedAt} snapshot=${buildGatewayStatusSnapshot(gatewayStatus)}`
       );
-    } catch {
+    } catch (error) {
       const probe = options?.probe === true;
-      lastChannelsStatusFailureAt = Date.now();
-      logger.warn(
-        `[channels.accounts] channels.status probe=${probe ? '1' : '0'} failed after ${Date.now() - startedAt}ms`
-      );
-      gatewayStatus = null;
+      const now = Date.now();
+      const cachedStatus = lastGatewayChannelStatusCache && now - lastGatewayChannelStatusCache.capturedAt <= CHANNEL_STATUS_CACHE_TTL_MS
+        ? lastGatewayChannelStatusCache
+        : null;
+      if (cachedStatus) {
+        gatewayStatus = cachedStatus.payload;
+        usedCachedGatewayStatus = true;
+        logger.warn(
+          `[channels.accounts] channels.status probe=${probe ? '1' : '0'} failed after ${Date.now() - startedAt}ms; using cached snapshot ageMs=${now - cachedStatus.capturedAt} error=${error instanceof Error ? error.message : String(error)}`
+        );
+      } else {
+        consecutiveChannelsStatusFailures += 1;
+        channelsStatusHardFailure = probe || consecutiveChannelsStatusFailures >= 2;
+        if (channelsStatusHardFailure) {
+          lastChannelsStatusFailureAt = now;
+        }
+        logger.warn(
+          `[channels.accounts] channels.status probe=${probe ? '1' : '0'} failed after ${Date.now() - startedAt}ms hard=${channelsStatusHardFailure ? '1' : '0'} consecutive=${consecutiveChannelsStatusFailures} error=${error instanceof Error ? error.message : String(error)}`
+        );
+        gatewayStatus = null;
+      }
     }
   }
 
@@ -629,7 +658,9 @@ export async function buildChannelAccountsView(
     platform: process.platform,
   });
   const gatewayHealthState = gatewayHealthStateForChannels(gatewayHealth.state);
-  const effectiveGatewayHealthState = skipRuntime ? undefined : gatewayHealthState;
+  const effectiveGatewayHealthState = skipRuntime || usedCachedGatewayStatus || (!gatewayStatus && !channelsStatusHardFailure)
+    ? undefined
+    : gatewayHealthState;
   const recentChannelIssues = skipRuntime ? {} : await getRecentChannelIssues();
 
   const channelTypes = new Set<string>([
@@ -723,7 +754,7 @@ export async function buildChannelAccountsView(
     const baseGroupStatus = pickChannelRuntimeStatus(visibleAccountSnapshots, channelSummary, {
       gatewayHealthState: effectiveGatewayHealthState,
     });
-    const groupStatus = !gatewayStatus && !skipRuntime && ctx.gatewayManager.getStatus().state === 'running'
+    const groupStatus = channelsStatusHardFailure && ctx.gatewayManager.getStatus().state === 'running'
       ? 'degraded'
       : effectiveGatewayHealthState && !hasRuntimeError && baseGroupStatus === 'connected'
         ? 'degraded'
@@ -738,7 +769,7 @@ export async function buildChannelAccountsView(
       channelType: uiChannelType,
       defaultAccountId,
       status: groupStatus,
-      statusReason: !gatewayStatus && !skipRuntime && ctx.gatewayManager.getStatus().state === 'running'
+      statusReason: channelsStatusHardFailure && ctx.gatewayManager.getStatus().state === 'running'
         ? 'channels_status_timeout'
         : activeRecentChannelIssue?.statusReason
           ? activeRecentChannelIssue.statusReason

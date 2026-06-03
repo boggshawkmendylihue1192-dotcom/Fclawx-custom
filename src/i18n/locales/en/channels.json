@@ -56,6 +56,8 @@
         "handledBy": "Handled by {{agent}}",
         "bindingStatusLabel": "Binding: {{status}}",
         "connectionStatusLabel": "Connection: {{status}}",
+        "senderIdentityNote": "Replies are sent from the same channel account; the binding only decides which Agent handles the message.",
+        "handlerMissing": "Unbound accounts use the default Agent",
         "bindingStatus": {
             "bound": "Bound",
             "unbound": "Unbound"

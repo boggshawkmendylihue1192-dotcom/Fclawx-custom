@@ -781,6 +781,8 @@ export function Channels() {
                           account.accountId === 'default' && account.name === account.accountId
                             ? t('account.mainAccount')
                             : account.name;
+                        const boundAgent = visibleAgents.find((agent) => agent.id === account.agentId);
+                        const boundAgentLabel = boundAgent?.name || account.agentId || '';
                         return (
                         <div key={`${group.channelType}-${account.accountId}`} className="rounded-xl bg-black/5 dark:bg-white/5 px-3 py-2">
                           <div className="flex items-center justify-between gap-3">
@@ -788,6 +790,20 @@ export function Channels() {
                               <div className="flex items-center gap-2">
                                 <p className="text-meta font-medium text-foreground truncate">{displayName}</p>
                               </div>
+                              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                                <span>{t('account.idLabel', { id: account.accountId })}</span>
+                                <span>·</span>
+                                <span>
+                                  {account.agentId
+                                    ? t('account.handledBy', { agent: boundAgentLabel })
+                                    : t('account.handlerMissing')}
+                                </span>
+                              </div>
+                              {group.channelType === 'wechat' && account.agentId && (
+                                <div className="mt-1 text-xs text-muted-foreground">
+                                  {t('account.senderIdentityNote')}
+                                </div>
+                              )}
                               {account.lastError && (
                                 <div className="text-xs text-destructive mt-1">{account.lastError}</div>
                               )}
