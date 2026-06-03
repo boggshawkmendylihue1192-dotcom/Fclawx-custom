@@ -6,6 +6,7 @@ import {
   Clock,
   Copy,
   Download,
+  ExternalLink,
   Gauge,
   Network,
   RefreshCw,
@@ -15,6 +16,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge, type BadgeProps } from '@/components/ui/badge';
 import { hostApiFetch } from '@/lib/host-api';
+import { invokeIpc } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import { useGatewayStore } from '@/stores/gateway';
 import type { UsageHistoryEntry } from '@/pages/Models/usage-history';
@@ -94,6 +96,12 @@ interface OpenClawRuntimeOperationResponse {
   version?: string;
   backupConfigPath?: string;
   rolledBack?: boolean;
+  error?: string;
+}
+
+interface GatewayControlUiResponse {
+  success: boolean;
+  url?: string;
   error?: string;
 }
 
@@ -367,6 +375,7 @@ export function Runtime() {
   const [runtimeHint, setRuntimeHint] = useState<string | null>(null);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [runtimeAction, setRuntimeAction] = useState<RuntimeActionState>('idle');
+  const [openingDashboard, setOpeningDashboard] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoadState((current) => (current === 'ready' ? 'loading' : 'loading'));
@@ -455,6 +464,21 @@ export function Runtime() {
     }
   }, [channelCounts, gatewayReasons, gatewayStatus, healthState, runtimeFindings, snapshot, usageHistory]);
 
+  const openGatewayDashboard = useCallback(async () => {
+    setOpeningDashboard(true);
+    try {
+      const result = await invokeIpc<GatewayControlUiResponse>('gateway:getControlUiUrl');
+      if (!result.success || !result.url) {
+        throw new Error(result.error || 'Gateway 仪表盘地址不可用');
+      }
+      await window.electron.openExternal(result.url);
+    } catch (dashboardError) {
+      toast.error(`打开网关仪表盘失败：${String(dashboardError)}`);
+    } finally {
+      setOpeningDashboard(false);
+    }
+  }, []);
+
   const checkRuntimeUpdate = useCallback(async () => {
     setRuntimeAction('checking');
     setRuntimeError(null);
@@ -538,6 +562,15 @@ export function Runtime() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void openGatewayDashboard()}
+            disabled={openingDashboard}
+          >
+            <ExternalLink className="mr-2 h-4 w-4" strokeWidth={2} />
+            网关仪表盘
+          </Button>
           <Button variant="outline" size="sm" onClick={() => void copyRuntimeReport()}>
             <Copy className="mr-2 h-4 w-4" strokeWidth={2} />
             ????

@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, readdir, readFile, rm, writeFile } from 'fs/promises';
+import { access, copyFile, mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { constants } from 'fs';
 import { join, normalize } from 'path';
 import { deleteAgentChannelAccounts, listConfiguredChannels, readOpenClawConfig, writeOpenClawConfig } from './channel-config';
@@ -443,6 +443,75 @@ async function writeAgentToolPermissions(config: AgentConfigDocument, entry: Age
   await writeFile(toolsPath, mergeManagedBlock(existing, buildToolPermissionsBlock(permissions)), 'utf-8');
 }
 
+function buildAgentBootstrapFileContent(fileName: string, agent: AgentListEntry): string {
+  const name = agent.name || agent.id;
+  const description = normalizeAgentDescription(agent.description);
+  switch (fileName) {
+    case 'AGENTS.md':
+      return [
+        `# ${name} Agent Workspace`,
+        '',
+        `You are ${name}, an OpenClaw agent managed by ClawX.`,
+        `Agent ID: ${agent.id}`,
+        description ? `Role: ${description}` : 'Role: configured ClawX/OpenClaw agent.',
+        '',
+        'Use SOUL.md for your core instructions, TOOLS.md for tool permissions, and IDENTITY.md for your public identity.',
+        'Do not identify yourself as ClawX unless the user asks about the desktop application.',
+        '',
+      ].join('\n');
+    case 'USER.md':
+      return [
+        '# USER.md',
+        '',
+        'Store durable user preferences and project facts here when memory is enabled and the user asks you to remember them.',
+        '',
+      ].join('\n');
+    case 'HEARTBEAT.md':
+      return [
+        '# HEARTBEAT.md',
+        '',
+        'Use this file for long-running follow-up notes, recurring task context, and continuity between background runs.',
+        '',
+      ].join('\n');
+    case 'BOOT.md':
+      return [
+        '# BOOT.md',
+        '',
+        'Read AGENTS.md, SOUL.md, TOOLS.md, USER.md, and IDENTITY.md before starting work in this workspace.',
+        '',
+      ].join('\n');
+    default:
+      return `# ${fileName}\n\n`;
+  }
+}
+
+async function ensureAgentBootstrapFiles(config: AgentConfigDocument, agent: AgentListEntry): Promise<void> {
+  const workspace = getAgentWorkspacePath(config, agent);
+  await ensureDir(workspace);
+
+  for (const fileName of AGENT_BOOTSTRAP_FILES) {
+    const target = join(workspace, fileName);
+    if (await fileExists(target)) continue;
+    if (fileName === 'IDENTITY.md') {
+      if (agent.id === MAIN_AGENT_ID) {
+        await ensureClawXIdentityFile(workspace, { createDir: true });
+      } else {
+        await ensureClawXAgentIdentityFile(workspace, agent, { createDir: true });
+      }
+      continue;
+    }
+    if (fileName === 'SOUL.md') {
+      await writeAgentInstructions(config, agent, AGENT_TEMPLATES[normalizeTemplateId(agent.templateId)]?.instructions || AGENT_TEMPLATES.general.instructions);
+      continue;
+    }
+    if (fileName === 'TOOLS.md') {
+      await writeAgentToolPermissions(config, agent);
+      continue;
+    }
+    await writeFile(target, buildAgentBootstrapFileContent(fileName, agent), 'utf-8');
+  }
+}
+
 async function fileExists(path: string): Promise<boolean> {
   try {
     await access(path, constants.F_OK);
@@ -613,21 +682,49 @@ function upsertBindingsForChannel(
   return nextBindings.length > 0 ? nextBindings : undefined;
 }
 
-async function listExistingAgentIdsOnDisk(): Promise<Set<string>> {
-  const ids = new Set<string>();
-  const agentsDir = join(getOpenClawConfigDir(), 'agents');
+async function agentRuntimeDirectoryExists(agentId: string): Promise<boolean> {
+  if (!agentId.trim()) return false;
+  return fileExists(join(getOpenClawConfigDir(), 'agents', agentId));
+}
 
-  try {
-    if (!(await fileExists(agentsDir))) return ids;
-    const entries = await readdir(agentsDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.isDirectory()) ids.add(entry.name);
-    }
-  } catch {
-    // ignore discovery failures
+function createRecoveredAgentEntry(agentId: string): AgentListEntry {
+  return {
+    id: agentId,
+    name: agentId,
+    workspace: agentId === MAIN_AGENT_ID ? DEFAULT_WORKSPACE_PATH : `~/.openclaw/workspace-${agentId}`,
+    agentDir: getDefaultAgentDirPath(agentId),
+    templateId: 'general',
+    toolPermissions: { ...DEFAULT_TOOL_PERMISSIONS },
+    subagents: toSubagentsConfig(normalizeDelegationConfig(undefined, DEFAULT_TOOL_PERMISSIONS)),
+  };
+}
+
+async function ensureAgentEntryForExistingRuntime(
+  config: AgentConfigDocument,
+  agentsConfig: AgentsConfig,
+  entries: AgentListEntry[],
+  agentId: string,
+): Promise<{ entries: AgentListEntry[]; index: number; recovered: boolean }> {
+  const index = entries.findIndex((entry) => entry.id === agentId);
+  if (index !== -1) {
+    return { entries, index, recovered: false };
   }
 
-  return ids;
+  if (!(await agentRuntimeDirectoryExists(agentId))) {
+    return { entries, index: -1, recovered: false };
+  }
+
+  const recovered = createRecoveredAgentEntry(agentId);
+  const nextEntries = [...entries, recovered];
+  ensureDelegationConfig(config, nextEntries);
+  config.agents = {
+    ...agentsConfig,
+    list: nextEntries,
+  };
+  await writeOpenClawConfig(config);
+  await ensureAgentBootstrapFiles(config, recovered);
+  logger.warn('Recovered orphaned agent runtime directory into config', { agentId });
+  return { entries: nextEntries, index: nextEntries.length - 1, recovered: true };
 }
 
 async function removeAgentRuntimeDirectory(agentId: string): Promise<void> {
@@ -857,6 +954,9 @@ export async function listAgentsSnapshot(): Promise<AgentsSnapshot> {
   if (JSON.stringify(config.agents) !== before) {
     await writeOpenClawConfig(config);
   }
+  await Promise.all(entries.map((entry) => ensureAgentBootstrapFiles(config, entry).catch((error) => {
+    logger.warn('Failed to ensure agent bootstrap files', { agentId: entry.id, error: String(error) });
+  })));
   return buildSnapshotFromConfig(config);
 }
 
@@ -906,11 +1006,10 @@ export async function createAgent(
     const { agentsConfig, entries, syntheticMain } = normalizeAgentsConfig(config);
     const normalizedName = normalizeAgentName(name);
     const existingIds = new Set(entries.map((entry) => entry.id));
-    const diskIds = await listExistingAgentIdsOnDisk();
     let nextId = slugifyAgentId(normalizedName);
     let suffix = 2;
 
-    while (existingIds.has(nextId) || diskIds.has(nextId)) {
+    while (existingIds.has(nextId)) {
       nextId = `${slugifyAgentId(normalizedName)}-${suffix}`;
       suffix += 1;
     }
@@ -939,13 +1038,14 @@ export async function createAgent(
     };
 
     await provisionAgentFilesystem(config, newAgent, { inheritWorkspace: options?.inheritWorkspace });
-    await writeAgentInstructions(
-      config,
-      newAgent,
-      options?.instructions || AGENT_TEMPLATES[newAgent.templateId || 'general']?.instructions || AGENT_TEMPLATES.general.instructions,
-    );
-    await writeAgentToolPermissions(config, newAgent);
-    await writeOpenClawConfig(config);
+  await writeAgentInstructions(
+    config,
+    newAgent,
+    options?.instructions || AGENT_TEMPLATES[newAgent.templateId || 'general']?.instructions || AGENT_TEMPLATES.general.instructions,
+  );
+  await writeAgentToolPermissions(config, newAgent);
+  await ensureAgentBootstrapFiles(config, newAgent);
+  await writeOpenClawConfig(config);
     logger.info('Created agent config entry', { agentId: nextId, inheritWorkspace: !!options?.inheritWorkspace });
     return await listAgentsSnapshot();
   });
@@ -1097,13 +1197,15 @@ export async function updateAgentModel(agentId: string, modelRef: string | null)
   return withConfigLock(async () => {
     const config = await readOpenClawConfig() as AgentConfigDocument;
     const { agentsConfig, entries } = normalizeAgentsConfig(config);
-    const index = entries.findIndex((entry) => entry.id === agentId);
+    const recovered = await ensureAgentEntryForExistingRuntime(config, agentsConfig, entries, agentId);
+    const currentEntries = recovered.entries;
+    const index = recovered.index;
     if (index === -1) {
       throw new Error(`Agent "${agentId}" not found`);
     }
 
     const normalizedModelRef = typeof modelRef === 'string' ? modelRef.trim() : '';
-    const nextEntry: AgentListEntry = { ...entries[index] };
+    const nextEntry: AgentListEntry = { ...currentEntries[index] };
 
     if (!normalizedModelRef) {
       delete nextEntry.model;
@@ -1120,10 +1222,10 @@ export async function updateAgentModel(agentId: string, modelRef: string | null)
       agentsConfig.defaults = defaults;
     }
 
-    entries[index] = nextEntry;
+    currentEntries[index] = nextEntry;
     config.agents = {
       ...agentsConfig,
-      list: entries,
+      list: currentEntries,
     };
 
     await writeOpenClawConfig(config);
