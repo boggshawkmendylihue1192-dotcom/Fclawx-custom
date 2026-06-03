@@ -7,11 +7,13 @@ import {
   Loader2,
   MessageSquareText,
   Network,
+  Plus,
   RotateCcw,
   Save,
   Search,
   Server,
   SlidersHorizontal,
+  Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -20,6 +22,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { hostApiFetch } from '@/lib/host-api';
 import { cn } from '@/lib/utils';
+import { useAgentsStore } from '@/stores/agents';
 
 type WebSearchProviderId =
   | 'auto'
@@ -62,6 +65,7 @@ type WebSearchConfigSnapshot = {
   cacheTtlMinutes: number;
   providers: WebSearchProviderDefinition[];
   providerConfigs: Record<string, Record<string, string>>;
+  agentOverrides: Record<string, WebSearchProviderId>;
 };
 
 type ProviderConfigDraft = {
@@ -241,9 +245,14 @@ export function WebSearchSettings() {
   const [timeoutSeconds, setTimeoutSeconds] = useState('30');
   const [cacheTtlMinutes, setCacheTtlMinutes] = useState('15');
   const [providerDrafts, setProviderDrafts] = useState<Record<string, ProviderConfigDraft>>({});
+  const [agentOverrides, setAgentOverrides] = useState<Record<string, WebSearchProviderId>>({});
+  const [agentOverrideId, setAgentOverrideId] = useState('');
+  const [agentOverrideProvider, setAgentOverrideProvider] = useState<WebSearchProviderId>('auto');
   const [searchTool, setSearchTool] = useState<SearchToolId>('web_search');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const agents = useAgentsStore((state) => state.agents);
+  const fetchAgents = useAgentsStore((state) => state.fetchAgents);
 
   const selectedProvider = useMemo(
     () => snapshot?.providers.find((entry) => entry.id === provider) ?? null,
@@ -267,6 +276,7 @@ export function WebSearchSettings() {
           toProviderDraft(next.providerConfigs[entry.id]),
         ]),
       ));
+      setAgentOverrides(next.agentOverrides || {});
     } catch (error) {
       toast.error(`搜索工具配置加载失败：${String(error)}`);
     } finally {
@@ -300,6 +310,7 @@ export function WebSearchSettings() {
           timeoutSeconds: Number(timeoutSeconds),
           cacheTtlMinutes: Number(cacheTtlMinutes),
           providerConfig: toProviderConfigPayload(selectedDraft),
+          agentOverrides,
         }),
       });
       setSnapshot(next);
@@ -314,12 +325,42 @@ export function WebSearchSettings() {
           toProviderDraft(next.providerConfigs[entry.id]),
         ]),
       ));
+      setAgentOverrides(next.agentOverrides || {});
       toast.success('搜索工具设置已保存，网关会自动重新加载');
     } catch (error) {
       toast.error(`搜索工具设置保存失败：${String(error)}`);
     } finally {
       setSaving(false);
     }
+  };
+
+  useEffect(() => {
+    void fetchAgents();
+  }, [fetchAgents]);
+
+  useEffect(() => {
+    if (agentOverrideId || agents.length === 0) return;
+    setAgentOverrideId(agents[0].id);
+  }, [agentOverrideId, agents]);
+
+  const handleAddAgentOverride = () => {
+    const normalized = agentOverrideId.trim();
+    if (!normalized) {
+      toast.error('请选择智能体');
+      return;
+    }
+    setAgentOverrides((current) => ({
+      ...current,
+      [normalized]: agentOverrideProvider,
+    }));
+  };
+
+  const handleRemoveAgentOverride = (agentId: string) => {
+    setAgentOverrides((current) => {
+      const next = { ...current };
+      delete next[agentId];
+      return next;
+    });
   };
 
   return (
@@ -439,6 +480,78 @@ export function WebSearchSettings() {
             </p>
           </button>
         ))}
+      </div>
+
+      <div className="space-y-4 rounded-lg border border-black/10 p-4 dark:border-white/10">
+        <div className="flex flex-col gap-1">
+          <h3 className="text-base font-semibold text-foreground">智能体独立搜索工具</h3>
+          <p className="text-xs text-muted-foreground">
+            为指定智能体绑定专属 web_search provider。切换到该智能体或把任务发给它时，会自动应用对应搜索工具；未配置时继续使用上面的全局搜索设置。
+          </p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-[minmax(0,1.5fr)_minmax(180px,0.7fr)_auto]">
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">智能体</Label>
+            <select
+              value={agentOverrideId}
+              onChange={(event) => setAgentOverrideId(event.target.value)}
+              className="h-10 w-full rounded-lg border border-black/10 bg-background px-3 text-sm text-foreground dark:border-white/10"
+            >
+              {agents.map((agent) => (
+                <option key={agent.id} value={agent.id}>{agent.name || agent.id}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">搜索工具</Label>
+            <select
+              value={agentOverrideProvider}
+              onChange={(event) => setAgentOverrideProvider(event.target.value as WebSearchProviderId)}
+              className="h-10 w-full rounded-lg border border-black/10 bg-background px-3 text-sm text-foreground dark:border-white/10"
+            >
+              {(snapshot?.providers || []).map((entry) => (
+                <option key={entry.id} value={entry.id}>{entry.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-end">
+            <Button type="button" variant="outline" className="h-10 w-full md:w-auto" onClick={handleAddAgentOverride}>
+              <Plus className="mr-2 h-4 w-4" />
+              添加
+            </Button>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          {Object.keys(agentOverrides).length === 0 ? (
+            <div className="rounded-lg bg-black/5 px-3 py-3 text-sm text-muted-foreground dark:bg-white/10">
+              暂无智能体专属搜索工具。添加后点击右上角“保存”生效。
+            </div>
+          ) : (
+            Object.entries(agentOverrides).map(([agentId, overrideProvider]) => {
+              const agentLabel = agents.find((agent) => agent.id === agentId)?.name || agentId;
+              const providerLabel = snapshot?.providers.find((entry) => entry.id === overrideProvider)?.name || overrideProvider;
+              return (
+                <div key={agentId} className="flex items-center justify-between gap-3 rounded-lg bg-black/5 px-3 py-2 dark:bg-white/10">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-foreground">{agentLabel}</p>
+                    <p className="text-xs text-muted-foreground">Agent ID：{agentId} · 搜索工具：{providerLabel}</p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 shrink-0 text-red-500 hover:bg-red-500/10 hover:text-red-600"
+                    onClick={() => handleRemoveAgentOverride(agentId)}
+                    aria-label={`删除 ${agentLabel} 的搜索工具覆盖`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              );
+            })
+          )}
+        </div>
       </div>
 
       <div className="grid gap-4 rounded-lg border border-black/10 p-4 dark:border-white/10 md:grid-cols-3">

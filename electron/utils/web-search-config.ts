@@ -41,6 +41,7 @@ export type WebSearchConfigSnapshot = {
   cacheTtlMinutes: number;
   providers: WebSearchProviderDefinition[];
   providerConfigs: Record<string, Record<string, string>>;
+  agentOverrides: Record<string, WebSearchProviderId>;
 };
 
 export type WebSearchConfigUpdate = {
@@ -50,6 +51,7 @@ export type WebSearchConfigUpdate = {
   timeoutSeconds?: number;
   cacheTtlMinutes?: number;
   providerConfig?: Record<string, string>;
+  agentOverrides?: Record<string, WebSearchProviderId | null | undefined>;
 };
 
 export const WEB_SEARCH_PROVIDERS: WebSearchProviderDefinition[] = [
@@ -241,6 +243,40 @@ function cleanProviderConfig(input: Record<string, string> | undefined): Record<
   return result;
 }
 
+function normalizeAgentId(value: unknown): string {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  return /^[a-zA-Z0-9_-]{1,64}$/.test(raw) ? raw : '';
+}
+
+function readAgentOverrides(search: PlainRecord): Record<string, WebSearchProviderId> {
+  const raw = isPlainRecord(search.agentOverrides) ? search.agentOverrides : {};
+  const result: Record<string, WebSearchProviderId> = {};
+  for (const [agentId, provider] of Object.entries(raw)) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    if (!normalizedAgentId) continue;
+    result[normalizedAgentId] = normalizeProvider(provider);
+  }
+  return result;
+}
+
+function writeAgentOverrides(search: PlainRecord, overrides: Record<string, WebSearchProviderId | null | undefined>): void {
+  const current = readAgentOverrides(search);
+  for (const [agentId, provider] of Object.entries(overrides)) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    if (!normalizedAgentId) continue;
+    if (provider == null) {
+      delete current[normalizedAgentId];
+    } else {
+      current[normalizedAgentId] = normalizeProvider(provider);
+    }
+  }
+  if (Object.keys(current).length === 0) {
+    delete search.agentOverrides;
+  } else {
+    search.agentOverrides = current;
+  }
+}
+
 export async function getWebSearchConfigSnapshot(): Promise<WebSearchConfigSnapshot> {
   const config = await readOpenClawConfig() as PlainRecord;
   const tools = isPlainRecord(config.tools) ? config.tools : {};
@@ -260,6 +296,7 @@ export async function getWebSearchConfigSnapshot(): Promise<WebSearchConfigSnaps
         readProviderWebSearchConfig(config, provider.pluginId),
       ]),
     ),
+    agentOverrides: readAgentOverrides(search),
   };
 }
 
@@ -288,6 +325,9 @@ export async function updateWebSearchConfig(update: WebSearchConfigUpdate): Prom
     if (update.cacheTtlMinutes !== undefined) {
       search.cacheTtlMinutes = numberOrDefault(update.cacheTtlMinutes, 15, 0, 1440);
     }
+    if (update.agentOverrides) {
+      writeAgentOverrides(search, update.agentOverrides);
+    }
 
     const provider = WEB_SEARCH_PROVIDERS.find((entry) => entry.id === normalizeProvider(update.provider ?? search.provider));
     if (provider?.pluginId && update.providerConfig) {
@@ -304,5 +344,51 @@ export async function updateWebSearchConfig(update: WebSearchConfigUpdate): Prom
 
     await writeOpenClawConfig(config);
     return getWebSearchConfigSnapshot();
+  });
+}
+
+export async function applyWebSearchAgentOverride(agentId: string): Promise<{
+  applied: boolean;
+  provider: WebSearchProviderId | null;
+  agentId: string | null;
+  snapshot: WebSearchConfigSnapshot;
+}> {
+  return withConfigLock(async () => {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    if (!normalizedAgentId) {
+      return {
+        applied: false,
+        provider: null,
+        agentId: null,
+        snapshot: await getWebSearchConfigSnapshot(),
+      };
+    }
+
+    const config = await readOpenClawConfig() as PlainRecord;
+    const search = getSearchConfig(config);
+    const overrides = readAgentOverrides(search);
+    const provider = overrides[normalizedAgentId];
+    if (!provider) {
+      return {
+        applied: false,
+        provider: null,
+        agentId: normalizedAgentId,
+        snapshot: await getWebSearchConfigSnapshot(),
+      };
+    }
+
+    if (provider === 'auto') {
+      delete search.provider;
+    } else {
+      search.provider = provider;
+    }
+
+    await writeOpenClawConfig(config);
+    return {
+      applied: true,
+      provider,
+      agentId: normalizedAgentId,
+      snapshot: await getWebSearchConfigSnapshot(),
+    };
   });
 }

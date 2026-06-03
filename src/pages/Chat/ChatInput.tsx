@@ -291,6 +291,31 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false }:
     setOptimisticModelRef(null);
   }, [currentAgent?.modelRef, currentAgentId, currentSessionKey, currentSessionModelRef]);
 
+  const applyAgentWebSearchOverride = useCallback(async (agentId: string | null | undefined) => {
+    const normalizedAgentId = agentId?.trim();
+    if (!normalizedAgentId || gatewayStatus.state !== 'running') return;
+    await hostApiFetch<{ success: boolean; applied?: boolean; provider?: string | null }>(
+      '/api/web-search/apply-agent',
+      {
+        method: 'POST',
+        body: JSON.stringify({ agentId: normalizedAgentId }),
+      },
+    );
+  }, [gatewayStatus.state]);
+
+  useEffect(() => {
+    if (!currentAgentId || gatewayStatus.state !== 'running') return;
+    let cancelled = false;
+    void applyAgentWebSearchOverride(currentAgentId).catch((error) => {
+      if (!cancelled) {
+        console.warn('[ChatInput] Failed to apply agent web_search override:', error);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [applyAgentWebSearchOverride, currentAgentId, gatewayStatus.state]);
+
   // Auto-resize textarea
   useEffect(() => {
     if (textareaRef.current) {
@@ -626,6 +651,12 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false }:
 
     // Capture values before clearing — clear input immediately for snappy UX,
     // but keep attachments available for the async send
+    try {
+      await applyAgentWebSearchOverride(targetAgentId || currentAgentId);
+    } catch (error) {
+      console.warn('[ChatInput] Failed to apply target agent web_search override:', error);
+    }
+
     console.log(`[handleSend] text="${textToSend.substring(0, 50)}", attachments=${attachments.length}, ready=${readyAttachments.length}, sending=${!!attachmentsToSend}`);
     if (attachmentsToSend) {
       console.log('[handleSend] Attachment details:', attachmentsToSend.map(a => ({
@@ -644,7 +675,7 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false }:
     setTargetAgentId(null);
     setPickerOpen(false);
     setSkillPickerOpen(false);
-  }, [input, attachments, canSend, onSend, targetAgentId]);
+  }, [input, attachments, canSend, onSend, targetAgentId, currentAgentId, applyAgentWebSearchOverride]);
 
   const handleStop = useCallback(() => {
     if (!canStop) return;

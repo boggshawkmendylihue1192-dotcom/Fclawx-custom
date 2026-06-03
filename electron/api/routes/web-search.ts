@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 import {
+  applyWebSearchAgentOverride,
   getWebSearchConfigSnapshot,
   updateWebSearchConfig,
   type WebSearchConfigUpdate,
@@ -30,6 +31,20 @@ export async function handleWebSearchRoutes(
       const snapshot = await updateWebSearchConfig(body);
       scheduleGatewayReload(ctx);
       sendJson(res, 200, { success: true, ...snapshot });
+    } catch (error) {
+      sendJson(res, 500, { success: false, error: String(error) });
+    }
+    return true;
+  }
+
+  if (url.pathname === '/api/web-search/apply-agent' && req.method === 'POST') {
+    try {
+      const body = await parseJsonBody<{ agentId?: string }>(req);
+      const result = await applyWebSearchAgentOverride(body.agentId || '');
+      if (result.applied) {
+        scheduleGatewayReload(ctx);
+      }
+      sendJson(res, 200, { success: true, ...result });
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
     }
