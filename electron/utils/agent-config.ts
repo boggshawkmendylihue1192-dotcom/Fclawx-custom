@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, readFile, rm, writeFile } from 'fs/promises';
+import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { constants } from 'fs';
 import { join, normalize } from 'path';
 import { deleteAgentChannelAccounts, listConfiguredChannels, readOpenClawConfig, writeOpenClawConfig } from './channel-config';
@@ -727,6 +727,71 @@ async function ensureAgentEntryForExistingRuntime(
   return { entries: nextEntries, index: nextEntries.length - 1, recovered: true };
 }
 
+function isRecoverableAgentRuntimeId(agentId: string): boolean {
+  const trimmed = agentId.trim();
+  return /^[a-zA-Z0-9_-]{1,64}$/.test(trimmed);
+}
+
+async function listRuntimeAgentIds(): Promise<string[]> {
+  const agentsDir = join(getOpenClawConfigDir(), 'agents');
+  let entries;
+  try {
+    entries = await readdir(agentsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isDirectory() && isRecoverableAgentRuntimeId(entry.name))
+    .map((entry) => entry.name)
+    .sort((a, b) => {
+      if (a === MAIN_AGENT_ID) return -1;
+      if (b === MAIN_AGENT_ID) return 1;
+      return a.localeCompare(b);
+    });
+}
+
+async function recoverAgentEntriesFromRuntimeDirs(
+  config: AgentConfigDocument,
+  agentsConfig: AgentsConfig,
+  entries: AgentListEntry[],
+): Promise<{ entries: AgentListEntry[]; recoveredIds: string[] }> {
+  const runtimeIds = await listRuntimeAgentIds();
+  if (runtimeIds.length === 0) {
+    return { entries, recoveredIds: [] };
+  }
+
+  const existingIds = new Set(entries.map((entry) => entry.id));
+  const recoveredIds: string[] = [];
+  let nextEntries = entries;
+  for (const agentId of runtimeIds) {
+    if (existingIds.has(agentId)) continue;
+    nextEntries = [...nextEntries, createRecoveredAgentEntry(agentId)];
+    existingIds.add(agentId);
+    recoveredIds.push(agentId);
+  }
+
+  if (recoveredIds.length === 0) {
+    return { entries, recoveredIds };
+  }
+
+  ensureDelegationConfig(config, nextEntries);
+  config.agents = {
+    ...agentsConfig,
+    list: nextEntries,
+  };
+  await writeOpenClawConfig(config);
+  await Promise.all(recoveredIds.map((agentId) => {
+    const entry = nextEntries.find((candidate) => candidate.id === agentId);
+    return entry
+      ? ensureAgentBootstrapFiles(config, entry).catch((error) => {
+        logger.warn('Failed to ensure recovered agent bootstrap files', { agentId, error: String(error) });
+      })
+      : Promise.resolve();
+  }));
+  logger.warn('Recovered orphaned agent runtime directories into config', { agentIds: recoveredIds });
+  return { entries: nextEntries, recoveredIds };
+}
+
 async function removeAgentRuntimeDirectory(agentId: string): Promise<void> {
   const runtimeDir = join(getOpenClawConfigDir(), 'agents', agentId);
   try {
@@ -949,12 +1014,14 @@ async function buildSnapshotFromConfig(config: AgentConfigDocument, preloadedCha
 export async function listAgentsSnapshot(): Promise<AgentsSnapshot> {
   const config = await readOpenClawConfig() as AgentConfigDocument;
   const before = JSON.stringify(config.agents);
-  const { entries } = normalizeAgentsConfig(config);
-  ensureDelegationConfig(config, entries);
+  const { agentsConfig, entries } = normalizeAgentsConfig(config);
+  const recovered = await recoverAgentEntriesFromRuntimeDirs(config, agentsConfig, entries);
+  const currentEntries = recovered.entries;
+  ensureDelegationConfig(config, currentEntries);
   if (JSON.stringify(config.agents) !== before) {
     await writeOpenClawConfig(config);
   }
-  await Promise.all(entries.map((entry) => ensureAgentBootstrapFiles(config, entry).catch((error) => {
+  await Promise.all(currentEntries.map((entry) => ensureAgentBootstrapFiles(config, entry).catch((error) => {
     logger.warn('Failed to ensure agent bootstrap files', { agentId: entry.id, error: String(error) });
   })));
   return buildSnapshotFromConfig(config);
