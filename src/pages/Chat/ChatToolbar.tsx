@@ -3,9 +3,10 @@
  * Session selector, new session, refresh, and the workspace browser
  * entry point.  Rendered in the Header when on the Chat page.
  */
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { RefreshCw, Bot, FolderTree, ListTree } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useChatStore } from '@/stores/chat';
 import { useAgentsStore } from '@/stores/agents';
@@ -28,7 +29,9 @@ export function ChatToolbar({
   const refresh = useChatStore((s) => s.refresh);
   const loading = useChatStore((s) => s.loading);
   const currentAgentId = useChatStore((s) => s.currentAgentId);
+  const switchSession = useChatStore((s) => s.switchSession);
   const agents = useAgentsStore((s) => s.agents);
+  const fetchAgents = useAgentsStore((s) => s.fetchAgents);
   const openBrowser = useArtifactPanel((s) => s.openBrowser);
   const panelOpen = useArtifactPanel((s) => s.open);
   const panelTab = useArtifactPanel((s) => s.tab);
@@ -39,6 +42,36 @@ export function ChatToolbar({
     [agents, currentAgentId],
   );
   const currentAgentName = currentAgent?.name ?? currentAgentId;
+  const selectableAgents = useMemo(() => {
+    if ((agents ?? []).some((agent) => agent.id === currentAgentId)) return agents ?? [];
+    return [
+      ...agents,
+      {
+        id: currentAgentId,
+        name: currentAgentName,
+        isDefault: currentAgentId === 'main',
+        modelDisplay: '',
+        inheritedModel: true,
+        workspace: '',
+        agentDir: '',
+        mainSessionKey: `agent:${currentAgentId || 'main'}:main`,
+        channelTypes: [],
+      },
+    ];
+  }, [agents, currentAgentId, currentAgentName]);
+
+  useEffect(() => {
+    if (agents.length === 0) {
+      void fetchAgents();
+    }
+  }, [agents.length, fetchAgents]);
+
+  const handleAgentChange = (agentId: string) => {
+    if (!agentId || agentId === currentAgentId) return;
+    const agent = selectableAgents.find((item) => item.id === agentId);
+    const sessionKey = agent?.mainSessionKey || `agent:${agentId}:main`;
+    switchSession(sessionKey);
+  };
 
   const browserActive = WORKSPACE_BROWSER_ENABLED && panelOpen && panelTab === 'browser';
   const questionDirectoryAvailable = questionDirectoryCount > 1 && !!onToggleQuestionDirectory;
@@ -47,7 +80,20 @@ export function ChatToolbar({
     <div className="flex items-center gap-2">
       <div className="hidden sm:flex items-center gap-1.5 rounded-full border border-black/10 bg-white/70 px-3 py-1.5 text-xs font-medium text-foreground/80 dark:border-white/10 dark:bg-white/5">
         <Bot className="h-3.5 w-3.5 text-primary" />
-        <span>{t('toolbar.currentAgent', { agent: currentAgentName })}</span>
+        <span className="whitespace-nowrap">{t('toolbar.currentAgent', { agent: '' }).trim()}</span>
+        <Select
+          value={currentAgentId}
+          onChange={(event) => handleAgentChange(event.target.value)}
+          disabled={loading || selectableAgents.length <= 1}
+          aria-label={t('composer.pickAgent')}
+          className="h-6 min-w-[96px] max-w-[180px] border-0 bg-transparent px-1 py-0 pr-6 text-xs font-semibold text-foreground shadow-none ring-offset-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
+        >
+          {selectableAgents.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.name}
+            </option>
+          ))}
+        </Select>
       </div>
       {WORKSPACE_BROWSER_ENABLED && (
         <Tooltip>

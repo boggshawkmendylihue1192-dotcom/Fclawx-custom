@@ -20,6 +20,7 @@ import {
   ExternalLink,
   Trash2,
   Pencil,
+  Archive,
   Check,
   X,
   Cpu,
@@ -41,8 +42,11 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { hostApiFetch } from '@/lib/host-api';
+import { useKnowledgeStore } from '@/stores/knowledge';
+import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 import logoSvg from '@/assets/logo.svg';
+import type { ChatSession } from '@/stores/chat/types';
 
 interface NavItemProps {
   to: string;
@@ -104,6 +108,44 @@ function getAgentIdFromSessionKey(sessionKey: string): string {
   return agentId || 'main';
 }
 
+function extractKnowledgeText(content: unknown): string {
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((block) => {
+      if (!block || typeof block !== 'object') return '';
+      const record = block as Record<string, unknown>;
+      if (typeof record.text === 'string') return record.text;
+      if (typeof record.thinking === 'string') return `[thinking] ${record.thinking}`;
+      if (typeof record.name === 'string') return `[tool] ${record.name}`;
+      return '';
+    })
+    .filter((text) => text.trim())
+    .join('\n')
+    .trim();
+}
+
+function normalizeKnowledgeTimestamp(value: unknown): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  const ms = value < 1e12 ? value * 1000 : value;
+  return new Date(ms).toLocaleString();
+}
+
+function formatSessionForKnowledge(messages: unknown[]): string {
+  return messages
+    .map((message, index) => {
+      if (!message || typeof message !== 'object') return '';
+      const record = message as Record<string, unknown>;
+      const role = typeof record.role === 'string' ? record.role : 'message';
+      const text = extractKnowledgeText(record.content);
+      if (!text) return '';
+      const time = normalizeKnowledgeTimestamp(record.timestamp);
+      return [`## ${index + 1}. ${role}${time ? ` · ${time}` : ''}`, text].join('\n');
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 export function Sidebar() {
   const isMac = window.electron?.platform === 'darwin';
   const sidebarCollapsed = useSettingsStore((state) => state.sidebarCollapsed);
@@ -124,6 +166,7 @@ export function Sidebar() {
   const renameSession = useChatStore((s) => s.renameSession);
   const loadSessions = useChatStore((s) => s.loadSessions);
   const loadHistory = useChatStore((s) => s.loadHistory);
+  const saveKnowledgeItem = useKnowledgeStore((s) => s.saveItem);
 
   const gatewayStatus = useGatewayStore((s) => s.status);
   const isGatewayRunning = gatewayStatus.state === 'running';
@@ -184,6 +227,7 @@ export function Sidebar() {
   const [sessionToDelete, setSessionToDelete] = useState<{ key: string; label: string } | null>(null);
   const [editingSessionKey, setEditingSessionKey] = useState<string | null>(null);
   const [editingLabel, setEditingLabel] = useState('');
+  const [archivingSessionKeys, setArchivingSessionKeys] = useState<Set<string>>(() => new Set());
   const [nowMs, setNowMs] = useState(INITIAL_NOW_MS);
   const [expandedSessionBuckets, setExpandedSessionBuckets] = useState<Record<SessionBucketKey, boolean>>(
     () => ({ ...DEFAULT_EXPANDED_SESSION_BUCKETS }),
@@ -228,6 +272,48 @@ export function Sidebar() {
       void handleRenameSubmit();
     } else if (e.key === 'Escape') {
       handleRenameCancel();
+    }
+  };
+
+  const archiveSessionToKnowledge = async (session: ChatSession, label: string, agentId: string, agentName: string) => {
+    if (archivingSessionKeys.has(session.key)) return;
+    setArchivingSessionKeys((current) => new Set(current).add(session.key));
+    try {
+      const response = await hostApiFetch<{ success?: boolean; messages?: unknown[]; error?: string }>(
+        `/api/sessions/transcript?sessionKey=${encodeURIComponent(session.key)}&limit=1000`,
+      );
+      const messages = Array.isArray(response.messages) ? response.messages : [];
+      const transcript = formatSessionForKnowledge(messages);
+      if (!transcript.trim()) {
+        toast.error('这个会话没有可归档的消息内容');
+        return;
+      }
+      const archivedAt = new Date().toLocaleString();
+      await saveKnowledgeItem({
+        title: label || session.displayName || session.label || session.key,
+        content: [
+          `来源会话：${session.key}`,
+          `绑定智能体：${agentName} (${agentId})`,
+          `归档时间：${archivedAt}`,
+          '',
+          transcript,
+        ].join('\n'),
+        tags: ['会话归档', agentName].filter(Boolean),
+        scope: 'agent',
+        agentId,
+        source: `session:${session.key}`,
+        confidence: 'medium',
+        status: 'active',
+      });
+      toast.success('已归档到知识库，删除原会话不会影响这条知识');
+    } catch (error) {
+      toast.error(`归档失败：${String(error)}`);
+    } finally {
+      setArchivingSessionKeys((current) => {
+        const next = new Set(current);
+        next.delete(session.key);
+        return next;
+      });
     }
   };
 
@@ -490,7 +576,7 @@ export function Sidebar() {
                             }}
                             onDoubleClick={() => handleStartRename(s.key, sessionLabel)}
                             className={cn(
-                              'w-full text-left rounded-lg px-2.5 py-1.5 text-meta transition-colors pr-16',
+                              'w-full text-left rounded-lg px-2.5 py-1.5 text-meta transition-colors pr-24',
                               'hover:bg-black/5 dark:hover:bg-white/5',
                               isOnChat && currentSessionKey === s.key
                                 ? 'bg-black/5 dark:bg-white/10 text-foreground font-medium'
@@ -508,6 +594,18 @@ export function Sidebar() {
                             'absolute right-1 flex items-center gap-0.5 transition-opacity',
                             'opacity-0 group-hover:opacity-100',
                           )}>
+                            <button
+                              aria-label="归档到知识库"
+                              title="归档到知识库"
+                              disabled={archivingSessionKeys.has(s.key)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void archiveSessionToKnowledge(s, sessionLabel, agentId, agentName);
+                              }}
+                              className="flex items-center justify-center rounded p-0.5 text-muted-foreground hover:text-primary hover:bg-primary/10 disabled:pointer-events-none disabled:opacity-50"
+                            >
+                              <Archive className="h-3.5 w-3.5" />
+                            </button>
                             <button
                               aria-label={t('common:sidebar.renameSession')}
                               onClick={(e) => {
