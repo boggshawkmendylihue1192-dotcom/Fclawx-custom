@@ -3280,6 +3280,27 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
       modified = true;
     }
 
+    const agentsConfig = config.agents as Record<string, unknown> | undefined;
+    if (agentsConfig && typeof agentsConfig === 'object' && Array.isArray(agentsConfig.list)) {
+      let agentsListModified = false;
+      agentsConfig.list = agentsConfig.list.map((entry) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
+        const agentEntry = { ...(entry as Record<string, unknown>) };
+        for (const key of ['templateId', 'toolPermissions', 'subagents']) {
+          if (key in agentEntry) {
+            delete agentEntry[key];
+            agentsListModified = true;
+          }
+        }
+        return agentEntry;
+      });
+      if (agentsListModified) {
+        config.agents = agentsConfig;
+        modified = true;
+        console.log('[sanitize] Removed ClawX-only fields from agents.list entries');
+      }
+    }
+
     if (repairUnregisteredAgentModelRefs(config)) {
       modified = true;
     }

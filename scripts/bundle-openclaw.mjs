@@ -17,18 +17,77 @@
  */
 
 import 'zx/globals';
+import crypto from 'node:crypto';
 import { ELECTRON_MAIN_RUNTIME_PACKAGES, EXTRA_BUNDLED_PACKAGES } from './openclaw-bundle-config.mjs';
 import { patchExtensionOpenClawSelfImports } from './openclaw-self-import-patch.mjs';
 
 const ROOT = path.resolve(__dirname, '..');
 const OUTPUT = path.join(ROOT, 'build', 'openclaw');
 const NODE_MODULES = path.join(ROOT, 'node_modules');
+const CACHE_FILE = path.join(OUTPUT, '.bundle-cache.json');
 
 // On Windows, pnpm virtual store paths can exceed MAX_PATH (260 chars).
 function normWin(p) {
   if (process.platform !== 'win32') return p;
   if (p.startsWith('\\\\?\\')) return p;
   return '\\\\?\\' + p.replace(/\//g, '\\');
+}
+
+function readJson(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+function fileHash(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function getBundleSignature(openclawPackagePath) {
+  const openclawPkg = readJson(path.join(openclawPackagePath, 'package.json'));
+  return {
+    version: 1,
+    openclawVersion: openclawPkg.version || null,
+    lockHash: fileHash(path.join(ROOT, 'pnpm-lock.yaml')),
+    bundleConfigHash: fileHash(path.join(ROOT, 'scripts', 'openclaw-bundle-config.mjs')),
+    selfImportPatchHash: fileHash(path.join(ROOT, 'scripts', 'openclaw-self-import-patch.mjs')),
+  };
+}
+
+function isExistingBundleComplete() {
+  const outputNodeModules = path.join(OUTPUT, 'node_modules');
+  if (!fs.existsSync(path.join(OUTPUT, 'openclaw.mjs'))) return false;
+  if (!fs.existsSync(path.join(OUTPUT, 'dist', 'entry.js'))) return false;
+  if (!fs.existsSync(outputNodeModules)) return false;
+
+  const requiredPackages = [
+    ...ELECTRON_MAIN_RUNTIME_PACKAGES,
+    'fast-string-width',
+    'fast-string-truncated-width',
+  ];
+  return requiredPackages.every((pkgName) => (
+    fs.existsSync(path.join(outputNodeModules, ...pkgName.split('/'), 'package.json'))
+  ));
+}
+
+function canReuseExistingBundle(signature) {
+  if (process.env.FORCE_OPENCLAW_BUNDLE === '1') return false;
+  if (!isExistingBundleComplete()) return false;
+  if (!fs.existsSync(CACHE_FILE)) return true;
+
+  try {
+    const cached = readJson(CACHE_FILE);
+    return JSON.stringify(cached.signature) === JSON.stringify(signature);
+  } catch {
+    return false;
+  }
+}
+
+function writeCache(signature) {
+  fs.mkdirSync(OUTPUT, { recursive: true });
+  fs.writeFileSync(CACHE_FILE, JSON.stringify({
+    signature,
+    createdAt: new Date().toISOString(),
+  }, null, 2), 'utf8');
 }
 
 echo`📦 Bundling openclaw for electron-builder...`;
@@ -42,6 +101,13 @@ if (!fs.existsSync(openclawLink)) {
 
 const openclawReal = fs.realpathSync(openclawLink);
 echo`   openclaw resolved: ${openclawReal}`;
+
+const bundleSignature = getBundleSignature(openclawReal);
+if (canReuseExistingBundle(bundleSignature)) {
+  writeCache(bundleSignature);
+  echo`OpenClaw bundle unchanged, reusing cached bundle: ${OUTPUT}`;
+  process.exit(0);
+}
 
 function shouldCopyOpenClawPackageEntry(src) {
   const rel = path.relative(openclawReal, src);
@@ -1091,3 +1157,4 @@ if (missingRuntimePackages.length > 0) {
   }
   process.exit(1);
 }
+writeCache(bundleSignature);

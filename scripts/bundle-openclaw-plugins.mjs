@@ -20,12 +20,14 @@
 import 'zx/globals';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const OUTPUT_ROOT = path.join(ROOT, 'build', 'openclaw-plugins');
 const NODE_MODULES = path.join(ROOT, 'node_modules');
+const CACHE_FILE = path.join(OUTPUT_ROOT, '.bundle-cache.json');
 
 // On Windows, pnpm virtual store paths can exceed MAX_PATH (260 chars).
 // Adding \\?\ prefix bypasses the limit for Win32 fs calls.
@@ -47,6 +49,61 @@ const PLUGINS = [
   { npmName: '@openclaw/whatsapp', pluginId: 'whatsapp' },
   { npmName: '@tencent-weixin/openclaw-weixin', pluginId: 'openclaw-weixin' },
 ];
+
+function readJson(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+function fileHash(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function getBundleSignature() {
+  const pluginVersions = {};
+  for (const { npmName } of PLUGINS) {
+    const pkgJsonPath = path.join(NODE_MODULES, ...npmName.split('/'), 'package.json');
+    if (!fs.existsSync(pkgJsonPath)) {
+      throw new Error(`Missing dependency "${npmName}". Run pnpm install first.`);
+    }
+    const pkg = readJson(pkgJsonPath);
+    pluginVersions[npmName] = pkg.version || null;
+  }
+
+  return {
+    version: 1,
+    plugins: pluginVersions,
+    lockHash: fileHash(path.join(ROOT, 'pnpm-lock.yaml')),
+  };
+}
+
+function isBundledPluginComplete(pluginId) {
+  const outputDir = path.join(OUTPUT_ROOT, pluginId);
+  return fs.existsSync(path.join(outputDir, 'openclaw.plugin.json'))
+    && fs.existsSync(path.join(outputDir, 'package.json'))
+    && fs.existsSync(path.join(outputDir, 'node_modules'));
+}
+
+function canReuseExistingBundle(signature) {
+  if (process.env.FORCE_OPENCLAW_PLUGIN_BUNDLE === '1') return false;
+  if (!PLUGINS.every(({ pluginId }) => isBundledPluginComplete(pluginId))) return false;
+  if (!fs.existsSync(CACHE_FILE)) return true;
+
+  try {
+    const cached = readJson(CACHE_FILE);
+    return JSON.stringify(cached.signature) === JSON.stringify(signature);
+  } catch {
+    return false;
+  }
+}
+
+function writeCache(signature) {
+  fs.mkdirSync(OUTPUT_ROOT, { recursive: true });
+  fs.writeFileSync(CACHE_FILE, JSON.stringify({
+    signature,
+    createdAt: new Date().toISOString(),
+  }, null, 2), 'utf8');
+}
 
 function getVirtualStoreNodeModules(realPkgPath) {
   let dir = realPkgPath;
@@ -243,8 +300,16 @@ function patchPluginId(pluginDir, expectedId) {
 echo`📦 Bundling OpenClaw plugin mirrors...`;
 fs.mkdirSync(OUTPUT_ROOT, { recursive: true });
 
+const signature = getBundleSignature();
+if (canReuseExistingBundle(signature)) {
+  writeCache(signature);
+  echo`Plugin mirrors unchanged, reusing cached bundle: ${OUTPUT_ROOT}`;
+  process.exit(0);
+}
+
 for (const plugin of PLUGINS) {
   bundleOnePlugin(plugin);
 }
 
+writeCache(signature);
 echo`✅ Plugin mirrors ready: ${OUTPUT_ROOT}`;

@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from 'fs/promises';
+import { access, copyFile, mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { constants } from 'fs';
 import { join, normalize } from 'path';
 import { deleteAgentChannelAccounts, listConfiguredChannels, readOpenClawConfig, writeOpenClawConfig } from './channel-config';
@@ -304,6 +304,14 @@ function uniqueStrings(values: unknown[]): string[] {
   return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0).map((value) => value.trim()))];
 }
 
+function stripUnsupportedAgentConfigKeys(entry: AgentListEntry): AgentListEntry {
+  const next = { ...entry };
+  delete next.templateId;
+  delete next.toolPermissions;
+  delete next.subagents;
+  return next;
+}
+
 function ensureDelegationConfig(config: AgentConfigDocument, entries: AgentListEntry[]): void {
   const agentIds = entries.map((entry) => entry.id).filter(Boolean);
   const agentsConfig = config.agents && typeof config.agents === 'object' ? config.agents : {};
@@ -332,8 +340,6 @@ function ensureDelegationConfig(config: AgentConfigDocument, entries: AgentListE
   for (const entry of entries) {
     const permissions = normalizeToolPermissions(entry.toolPermissions);
     const existingTools = entry.tools && typeof entry.tools === 'object' ? entry.tools : {};
-    const delegationConfig = normalizeDelegationConfig(entry.subagents, permissions);
-    const existingSubagents = entry.subagents && typeof entry.subagents === 'object' ? entry.subagents : {};
     entry.tools = permissions.delegation
       ? {
         ...existingTools,
@@ -346,12 +352,9 @@ function ensureDelegationConfig(config: AgentConfigDocument, entries: AgentListE
           ? existingTools.alsoAllow.filter((tool) => !DELEGATION_TOOL_NAMES.includes(tool))
           : existingTools.alsoAllow,
       };
-    entry.subagents = permissions.delegation
-      ? {
-        ...existingSubagents,
-        ...toSubagentsConfig(delegationConfig),
-      }
-      : existingSubagents;
+    delete entry.templateId;
+    delete entry.toolPermissions;
+    delete entry.subagents;
   }
 
   void agentIds;
@@ -719,77 +722,12 @@ async function ensureAgentEntryForExistingRuntime(
   ensureDelegationConfig(config, nextEntries);
   config.agents = {
     ...agentsConfig,
-    list: nextEntries,
+    list: nextEntries.map(stripUnsupportedAgentConfigKeys),
   };
   await writeOpenClawConfig(config);
   await ensureAgentBootstrapFiles(config, recovered);
   logger.warn('Recovered orphaned agent runtime directory into config', { agentId });
   return { entries: nextEntries, index: nextEntries.length - 1, recovered: true };
-}
-
-function isRecoverableAgentRuntimeId(agentId: string): boolean {
-  const trimmed = agentId.trim();
-  return /^[a-zA-Z0-9_-]{1,64}$/.test(trimmed);
-}
-
-async function listRuntimeAgentIds(): Promise<string[]> {
-  const agentsDir = join(getOpenClawConfigDir(), 'agents');
-  let entries;
-  try {
-    entries = await readdir(agentsDir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  return entries
-    .filter((entry) => entry.isDirectory() && isRecoverableAgentRuntimeId(entry.name))
-    .map((entry) => entry.name)
-    .sort((a, b) => {
-      if (a === MAIN_AGENT_ID) return -1;
-      if (b === MAIN_AGENT_ID) return 1;
-      return a.localeCompare(b);
-    });
-}
-
-async function recoverAgentEntriesFromRuntimeDirs(
-  config: AgentConfigDocument,
-  agentsConfig: AgentsConfig,
-  entries: AgentListEntry[],
-): Promise<{ entries: AgentListEntry[]; recoveredIds: string[] }> {
-  const runtimeIds = await listRuntimeAgentIds();
-  if (runtimeIds.length === 0) {
-    return { entries, recoveredIds: [] };
-  }
-
-  const existingIds = new Set(entries.map((entry) => entry.id));
-  const recoveredIds: string[] = [];
-  let nextEntries = entries;
-  for (const agentId of runtimeIds) {
-    if (existingIds.has(agentId)) continue;
-    nextEntries = [...nextEntries, createRecoveredAgentEntry(agentId)];
-    existingIds.add(agentId);
-    recoveredIds.push(agentId);
-  }
-
-  if (recoveredIds.length === 0) {
-    return { entries, recoveredIds };
-  }
-
-  ensureDelegationConfig(config, nextEntries);
-  config.agents = {
-    ...agentsConfig,
-    list: nextEntries,
-  };
-  await writeOpenClawConfig(config);
-  await Promise.all(recoveredIds.map((agentId) => {
-    const entry = nextEntries.find((candidate) => candidate.id === agentId);
-    return entry
-      ? ensureAgentBootstrapFiles(config, entry).catch((error) => {
-        logger.warn('Failed to ensure recovered agent bootstrap files', { agentId, error: String(error) });
-      })
-      : Promise.resolve();
-  }));
-  logger.warn('Recovered orphaned agent runtime directories into config', { agentIds: recoveredIds });
-  return { entries: nextEntries, recoveredIds };
 }
 
 async function removeAgentRuntimeDirectory(agentId: string): Promise<void> {
@@ -1014,14 +952,12 @@ async function buildSnapshotFromConfig(config: AgentConfigDocument, preloadedCha
 export async function listAgentsSnapshot(): Promise<AgentsSnapshot> {
   const config = await readOpenClawConfig() as AgentConfigDocument;
   const before = JSON.stringify(config.agents);
-  const { agentsConfig, entries } = normalizeAgentsConfig(config);
-  const recovered = await recoverAgentEntriesFromRuntimeDirs(config, agentsConfig, entries);
-  const currentEntries = recovered.entries;
-  ensureDelegationConfig(config, currentEntries);
+  const { entries } = normalizeAgentsConfig(config);
+  ensureDelegationConfig(config, entries);
   if (JSON.stringify(config.agents) !== before) {
     await writeOpenClawConfig(config);
   }
-  await Promise.all(currentEntries.map((entry) => ensureAgentBootstrapFiles(config, entry).catch((error) => {
+  await Promise.all(entries.map((entry) => ensureAgentBootstrapFiles(config, entry).catch((error) => {
     logger.warn('Failed to ensure agent bootstrap files', { agentId: entry.id, error: String(error) });
   })));
   return buildSnapshotFromConfig(config);
@@ -1092,6 +1028,7 @@ export async function createAgent(
       agentDir: getDefaultAgentDirPath(nextId),
     };
     newAgent.subagents = toSubagentsConfig(normalizeDelegationConfig(options?.delegationConfig, newAgent.toolPermissions));
+    const fileAgent: AgentListEntry = { ...newAgent };
 
     if (!nextEntries.some((entry) => entry.id === MAIN_AGENT_ID) && syntheticMain) {
       nextEntries.unshift(createImplicitMainEntry(config));
@@ -1101,20 +1038,25 @@ export async function createAgent(
 
     config.agents = {
       ...(config.agents || agentsConfig),
-      list: nextEntries,
+      list: nextEntries.map(stripUnsupportedAgentConfigKeys),
     };
 
-    await provisionAgentFilesystem(config, newAgent, { inheritWorkspace: options?.inheritWorkspace });
-  await writeAgentInstructions(
-    config,
-    newAgent,
-    options?.instructions || AGENT_TEMPLATES[newAgent.templateId || 'general']?.instructions || AGENT_TEMPLATES.general.instructions,
-  );
-  await writeAgentToolPermissions(config, newAgent);
-  await ensureAgentBootstrapFiles(config, newAgent);
-  await writeOpenClawConfig(config);
+    await provisionAgentFilesystem(config, fileAgent, { inheritWorkspace: options?.inheritWorkspace });
+    await writeAgentInstructions(
+      config,
+      fileAgent,
+      options?.instructions || AGENT_TEMPLATES[fileAgent.templateId || 'general']?.instructions || AGENT_TEMPLATES.general.instructions,
+    );
+    await writeAgentToolPermissions(config, fileAgent);
+    await ensureAgentBootstrapFiles(config, fileAgent);
+    await writeOpenClawConfig(config);
+    const persistedConfig = await readOpenClawConfig() as AgentConfigDocument;
+    const persistedAgents = Array.isArray(persistedConfig.agents?.list) ? persistedConfig.agents.list : [];
+    if (!persistedAgents.some((entry) => entry?.id === nextId)) {
+      throw new Error(`Agent "${nextId}" was not persisted to openclaw.json`);
+    }
     logger.info('Created agent config entry', { agentId: nextId, inheritWorkspace: !!options?.inheritWorkspace });
-    return await listAgentsSnapshot();
+    return await buildSnapshotFromConfig(persistedConfig);
   });
 }
 
@@ -1135,7 +1077,7 @@ export async function updateAgentName(agentId: string, name: string): Promise<Ag
 
     config.agents = {
       ...agentsConfig,
-      list: entries,
+      list: entries.map(stripUnsupportedAgentConfigKeys),
     };
 
     await writeOpenClawConfig(config);
@@ -1173,22 +1115,24 @@ export async function updateAgentProfile(agentId: string, update: AgentProfileUp
       ...(currentEntry.subagents || {}),
       ...(update.delegationConfig || {}),
     }, nextEntry.toolPermissions));
+    const fileEntry: AgentListEntry = { ...nextEntry };
 
     if (typeof update.name === 'string' && !nextEntry.default) {
       nextEntry.name = normalizeAgentName(update.name);
+      fileEntry.name = nextEntry.name;
     }
 
     entries[index] = nextEntry;
     ensureDelegationConfig(config, entries);
     config.agents = {
       ...(config.agents || agentsConfig),
-      list: entries,
+      list: entries.map(stripUnsupportedAgentConfigKeys),
     };
 
     if (typeof update.instructions === 'string') {
-      await writeAgentInstructions(config, nextEntry, update.instructions);
+      await writeAgentInstructions(config, fileEntry, update.instructions);
     }
-    await writeAgentToolPermissions(config, nextEntry);
+    await writeAgentToolPermissions(config, fileEntry);
     await writeOpenClawConfig(config);
     logger.info('Updated agent profile', { agentId, templateId });
     return buildSnapshotFromConfig(config);
@@ -1292,7 +1236,7 @@ export async function updateAgentModel(agentId: string, modelRef: string | null)
     currentEntries[index] = nextEntry;
     config.agents = {
       ...agentsConfig,
-      list: currentEntries,
+      list: currentEntries.map(stripUnsupportedAgentConfigKeys),
     };
 
     await writeOpenClawConfig(config);
@@ -1347,7 +1291,7 @@ export async function deleteAgentConfig(agentId: string): Promise<{ snapshot: Ag
 
     config.agents = {
       ...agentsConfig,
-      list: nextEntries,
+      list: nextEntries.map(stripUnsupportedAgentConfigKeys),
     };
     config.bindings = Array.isArray(config.bindings)
       ? config.bindings.filter((binding) => !(isChannelBinding(binding) && binding.agentId === agentId))
