@@ -467,7 +467,7 @@ function registerUnifiedRequestHandlers(gatewayManager: GatewayManager): void {
             break;
           }
           if (request.action === 'install') {
-            appUpdater.quitAndInstall();
+            await appUpdater.scheduleInstall();
             data = { success: true };
             break;
           }

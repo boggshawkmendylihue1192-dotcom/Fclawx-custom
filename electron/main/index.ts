@@ -130,6 +130,7 @@ let clawHubService!: ClawHubService;
 let hostEventBus!: HostEventBus;
 let hostApiServer: Server | null = null;
 let closePromptInFlight = false;
+let quitCleanupPromise: Promise<void> | null = null;
 const mainWindowFocusState = createMainWindowFocusState();
 const quitLifecycleState = createQuitLifecycleState();
 
@@ -317,6 +318,64 @@ function createMainWindow(): BrowserWindow {
   return win;
 }
 
+async function runQuitCleanup(reason: string): Promise<void> {
+  if (quitCleanupPromise) {
+    logger.debug(`Quit cleanup already running; joining existing task (${reason})`);
+    await quitCleanupPromise;
+    return;
+  }
+
+  quitCleanupPromise = (async () => {
+    logger.info(`Running quit cleanup (${reason})`);
+
+    try {
+      hostEventBus?.closeAll();
+    } catch (error) {
+      logger.warn('hostEventBus.closeAll() error during quit:', error);
+    }
+
+    try {
+      hostApiServer?.close();
+      hostApiServer = null;
+    } catch (error) {
+      logger.warn('hostApiServer.close() error during quit:', error);
+    }
+
+    try {
+      await extensionRegistry.teardownAll();
+    } catch (error) {
+      logger.warn('extensionRegistry.teardownAll() error during quit:', error);
+    }
+
+    const stopPromise = gatewayManager
+      ? gatewayManager.stop().catch((err) => {
+          logger.warn('gatewayManager.stop() error during quit:', err);
+        })
+      : Promise.resolve();
+    const timeoutPromise = new Promise<'timeout'>((resolve) => {
+      setTimeout(() => resolve('timeout'), 5000);
+    });
+
+    const result = await Promise.race([stopPromise.then(() => 'stopped' as const), timeoutPromise]);
+    if (result === 'timeout') {
+      logger.warn('Gateway shutdown timed out during app quit; proceeding with forced quit');
+      try {
+        const terminated = await gatewayManager.forceTerminateOwnedProcessForQuit();
+        if (terminated) {
+          logger.warn('Forced gateway process termination completed after quit timeout');
+        }
+      } catch (err) {
+        logger.warn('Forced gateway termination failed after quit timeout:', err);
+      }
+    }
+
+    markQuitCleanupCompleted(quitLifecycleState);
+    logger.info(`Quit cleanup completed (${reason})`);
+  })();
+
+  await quitCleanupPromise;
+}
+
 /**
  * Initialize the application
  */
@@ -400,6 +459,7 @@ async function initialize(): Promise<void> {
   }
 
   // Register update handlers
+  appUpdater.setBeforeInstall(() => runQuitCleanup('update-install'));
   registerUpdateHandlers(appUpdater, window);
 
   // Note: Auto-check for updates is driven by the renderer (update store init)
@@ -654,31 +714,7 @@ if (gotTheLock) {
       return;
     }
 
-    hostEventBus.closeAll();
-    hostApiServer?.close();
-    void extensionRegistry.teardownAll();
-
-    const stopPromise = gatewayManager.stop().catch((err) => {
-      logger.warn('gatewayManager.stop() error during quit:', err);
-    });
-    const timeoutPromise = new Promise<'timeout'>((resolve) => {
-      setTimeout(() => resolve('timeout'), 5000);
-    });
-
-    void Promise.race([stopPromise.then(() => 'stopped' as const), timeoutPromise]).then((result) => {
-      if (result === 'timeout') {
-        logger.warn('Gateway shutdown timed out during app quit; proceeding with forced quit');
-        void gatewayManager.forceTerminateOwnedProcessForQuit().then((terminated) => {
-          if (terminated) {
-            logger.warn('Forced gateway process termination completed after quit timeout');
-          }
-        }).catch((err) => {
-          logger.warn('Forced gateway termination failed after quit timeout:', err);
-        });
-      }
-      markQuitCleanupCompleted(quitLifecycleState);
-      app.quit();
-    });
+    void runQuitCleanup('app-quit').then(() => app.quit());
   });
 
   // Best-effort Gateway cleanup on unexpected crashes.

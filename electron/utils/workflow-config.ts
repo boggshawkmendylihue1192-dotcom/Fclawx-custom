@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { readFile, writeFile } from 'fs/promises';
+import { mkdir, readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { withConfigLock } from './config-mutex';
 import { getOpenClawConfigDir } from './paths';
@@ -251,6 +251,7 @@ async function readWorkflowsDocument(): Promise<WorkflowDocument> {
 }
 
 async function writeWorkflowsDocument(document: WorkflowDocument): Promise<void> {
+  await mkdir(getOpenClawConfigDir(), { recursive: true });
   await writeFile(workflowsPath(), `${JSON.stringify({
     workflows: document.workflows ?? [],
     roleTemplates: customRoleTemplates(document.roleTemplates),

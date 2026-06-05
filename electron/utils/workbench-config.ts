@@ -300,7 +300,7 @@ export async function markWorkbenchTaskRun(input: { id: string; status: AlwaysOn
     const task = snapshot.alwaysOnTasks.find((item) => item.id === input.id);
     if (!task) return snapshot;
     const now = Date.now();
-    const isFirstStateForRun = input.status === 'running' && task.lastRunStatus !== 'queued' && task.lastRunStatus !== 'running';
+    const isFirstStateForRun = input.status === 'running' && task.lastRunStatus !== 'running';
     const isTerminalFailure = input.status === 'failed';
     const nextTask = normalizeTask({
       ...task,

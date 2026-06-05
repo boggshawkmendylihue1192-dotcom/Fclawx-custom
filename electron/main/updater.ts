@@ -69,6 +69,8 @@ export class AppUpdater extends EventEmitter {
   private autoInstallCountdown = 0;
   private downloadedVersion: string | null = null;
   private installAfterLatestDownload = false;
+  private installInFlight = false;
+  private beforeInstall: (() => Promise<void> | void) | null = null;
 
   /** Delay (in seconds) before auto-installing a downloaded update. */
   private static readonly AUTO_INSTALL_DELAY_SECONDS = 5;
@@ -115,6 +117,10 @@ export class AppUpdater extends EventEmitter {
    */
   getStatus(): UpdateStatus {
     return this.status;
+  }
+
+  setBeforeInstall(handler: (() => Promise<void> | void) | null): void {
+    this.beforeInstall = handler;
   }
 
   /**
@@ -269,16 +275,29 @@ export class AppUpdater extends EventEmitter {
     return true;
   }
 
-  quitAndInstall(): void {
+  async quitAndInstall(): Promise<void> {
+    if (this.installInFlight) {
+      logger.info('[Updater] quitAndInstall skipped because installation is already in progress');
+      return;
+    }
+
+    this.installInFlight = true;
     logger.info('[Updater] quitAndInstall called');
     this.updateStatus({ status: 'installing', info: this.status.info });
     setQuitting();
+
+    try {
+      await this.beforeInstall?.();
+    } catch (error) {
+      logger.warn('[Updater] Pre-install cleanup failed; continuing with installer:', error);
+    }
+
     BrowserWindow.getAllWindows().forEach((window) => {
       if (window.isDestroyed()) return;
       window.removeAllListeners('close');
       window.close();
     });
-    autoUpdater.quitAndInstall();
+    autoUpdater.quitAndInstall(false, true);
   }
 
   /**
@@ -298,7 +317,11 @@ export class AppUpdater extends EventEmitter {
 
     this.installTimer = setTimeout(() => {
       this.installTimer = null;
-      this.quitAndInstall();
+      void this.quitAndInstall().catch((error) => {
+        logger.error('[Updater] Install failed:', error);
+        this.installInFlight = false;
+        this.updateStatus({ status: 'error', error: (error as Error).message || String(error) });
+      });
     }, 500);
   }
 

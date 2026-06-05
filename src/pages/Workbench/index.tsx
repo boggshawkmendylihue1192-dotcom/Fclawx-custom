@@ -47,7 +47,7 @@ interface WorkspaceEntry {
   size?: number;
 }
 
-type WorkbenchModal = 'memory' | 'task' | 'route' | 'report' | null;
+type WorkbenchModal = 'project' | 'memory' | 'task' | 'route' | 'report' | null;
 
 const inputClasses = 'h-[42px] rounded-xl text-sm bg-transparent border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:border-blue-500 shadow-sm transition-all text-foreground placeholder:text-foreground/40';
 const selectClasses = 'h-[42px] w-full rounded-xl text-sm bg-transparent border border-black/10 dark:border-white/10 px-3 text-foreground';
@@ -110,6 +110,7 @@ export function Workbench() {
   const [gitDiff, setGitDiff] = useState('');
   const [gitLog, setGitLog] = useState('');
   const [activeModal, setActiveModal] = useState<WorkbenchModal>(null);
+  const [projectDraft, setProjectDraft] = useState({ name: '', description: '', agentId: '', workspace: '' });
   const [memoryDraft, setMemoryDraft] = useState({ title: '', content: '', confidence: 'medium' as const });
   const [taskDraft, setTaskDraft] = useState({ title: '', objective: '', cadence: 'daily' as AlwaysOnTask['cadence'] });
   const [routeDraft, setRouteDraft] = useState({
@@ -254,6 +255,17 @@ export function Workbench() {
     }
   };
 
+  const createProject = () => {
+    const agent = agents.find((item) => item.id === selectedProject?.agentId) ?? agents[0];
+    setProjectDraft({
+      name: agent?.name ? `${agent.name} 工作区` : '新工作区',
+      description: '',
+      agentId: agent?.id || 'main',
+      workspace: agent?.workspace || selectedProject?.workspace || '',
+    });
+    setActiveModal('project');
+  };
+
   const createMemory = () => {
     if (!selectedProject) {
       toast.error('请先选择或创建工作区');
@@ -299,6 +311,29 @@ export function Workbench() {
   };
 
   const closeModal = () => setActiveModal(null);
+
+  const submitProject = async () => {
+    const name = projectDraft.name.trim();
+    if (!name) {
+      toast.error('请填写工作区名称');
+      return;
+    }
+    const timestamp = Date.now();
+    const id = crypto.randomUUID();
+    await saveProject({
+      id,
+      name,
+      description: projectDraft.description.trim(),
+      agentId: projectDraft.agentId || agents[0]?.id || 'main',
+      workspace: projectDraft.workspace.trim(),
+      status: 'active',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    setSelectedProjectId(id);
+    toast.success('工作区已创建');
+    closeModal();
+  };
 
   const submitMemory = async () => {
     if (!selectedProject) return;
@@ -454,7 +489,7 @@ export function Workbench() {
               <RefreshCw className="mr-2 h-4 w-4" />
               刷新
             </Button>
-            <Button onClick={() => agents[0] && void saveProject(seedProjectFromAgent(agents[0]))} className="h-9 rounded-full px-4">
+            <Button onClick={createProject} className="h-9 rounded-full px-4">
               <Plus className="mr-2 h-4 w-4" />
               新建工作区
             </Button>
@@ -697,6 +732,25 @@ export function Workbench() {
           </div>
         </div>
       </div>
+      {activeModal === 'project' && (
+        <WorkbenchActionModal title="新建工作区" description="创建一个独立项目空间，绑定工作目录和默认智能体，后续记忆、后台任务和报告都会归属到这里。" onClose={closeModal} onSubmit={() => void submitProject()}>
+          <FormField label="工作区名称">
+            <Input value={projectDraft.name} onChange={(event) => setProjectDraft({ ...projectDraft, name: event.target.value })} className={inputClasses} autoFocus />
+          </FormField>
+          <FormField label="描述">
+            <Input value={projectDraft.description} onChange={(event) => setProjectDraft({ ...projectDraft, description: event.target.value })} className={inputClasses} />
+          </FormField>
+          <FormField label="绑定智能体">
+            <select value={projectDraft.agentId} onChange={(event) => setProjectDraft({ ...projectDraft, agentId: event.target.value })} className={selectClasses}>
+              {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
+              {agents.length === 0 && <option value="main">Main</option>}
+            </select>
+          </FormField>
+          <FormField label="工作区路径">
+            <Input value={projectDraft.workspace} onChange={(event) => setProjectDraft({ ...projectDraft, workspace: event.target.value })} className={inputClasses} placeholder="例如：C:\\Users\\你\\项目目录" />
+          </FormField>
+        </WorkbenchActionModal>
+      )}
       {activeModal === 'memory' && (
         <WorkbenchActionModal title="新增记忆" description="把项目偏好、事实或修正记录写入当前工作区。用途更偏白盒记忆，独立知识库请在左侧知识库页面维护。" onClose={closeModal} onSubmit={() => void submitMemory()}>
           <FormField label="标题">
