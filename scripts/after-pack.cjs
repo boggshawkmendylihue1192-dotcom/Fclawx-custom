@@ -1,4 +1,4 @@
-/**
+﻿/**
  * after-pack.cjs
  *
  * electron-builder afterPack hook.
@@ -12,9 +12,9 @@
  * bypassing electron-builder's glob filtering entirely.
  *
  * Additionally it performs two rounds of cleanup:
- *   1. General cleanup — removes dev artifacts (type defs, source maps, docs,
+ *   1. General cleanup 鈥?removes dev artifacts (type defs, source maps, docs,
  *      test dirs) from both the openclaw root and its node_modules.
- *   2. Platform-specific cleanup — strips native binaries for non-target
+ *   2. Platform-specific cleanup 鈥?strips native binaries for non-target
  *      platforms (koffi multi-platform prebuilds, @napi-rs/canvas, @img/sharp,
  *      @mariozechner/clipboard).
  */
@@ -22,7 +22,6 @@
 const { cpSync, existsSync, readdirSync, rmSync, statSync, mkdirSync, realpathSync, readFileSync, writeFileSync } = require('fs');
 const { join, dirname, basename, relative } = require('path');
 const { ELECTRON_MAIN_RUNTIME_PACKAGES } = require('./openclaw-bundle-config.mjs');
-const { patchNsisExtractTemplate } = require('./patch-nsis-extract.mjs');
 
 // On Windows, paths in pnpm's virtual store can exceed the default MAX_PATH
 // limit (260 chars). Node.js 18.17+ respects the system LongPathsEnabled
@@ -34,7 +33,7 @@ function normWin(p) {
   return '\\\\?\\' + p.replace(/\//g, '\\');
 }
 
-// ── Arch helpers ─────────────────────────────────────────────────────────────
+// 鈹€鈹€ Arch helpers 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 // electron-builder Arch enum: 0=ia32, 1=x64, 2=armv7l, 3=arm64, 4=universal
 const ARCH_MAP = { 0: 'ia32', 1: 'x64', 2: 'armv7l', 3: 'arm64', 4: 'universal' };
 
@@ -62,7 +61,7 @@ function readInstalledPackageVersion(packageDir) {
   return typeof pkg?.version === 'string' ? pkg.version.trim() : null;
 }
 
-// ── General cleanup ──────────────────────────────────────────────────────────
+// 鈹€鈹€ General cleanup 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 function cleanupUnnecessaryFiles(dir) {
   let removedCount = 0;
@@ -73,7 +72,7 @@ function cleanupUnnecessaryFiles(dir) {
   // .d.mts / .d.cts are TypeScript declaration files for ESM/CJS dual-package
   // builds. They are useless at runtime but show up in huge volumes from
   // typed packages (e.g. typebox), and inflate the per-process file count
-  // that codesign opens during macOS signing → EMFILE.
+  // that codesign opens during macOS signing 鈫?EMFILE.
   const REMOVE_FILE_EXTS = [
     '.d.ts', '.d.ts.map',
     '.d.mts', '.d.mts.map',
@@ -112,7 +111,7 @@ function cleanupUnnecessaryFiles(dir) {
   return removedCount;
 }
 
-// ── Platform-specific: koffi ─────────────────────────────────────────────────
+// 鈹€鈹€ Platform-specific: koffi 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 // koffi ships 18 platform pre-builds under koffi/build/koffi/{platform}_{arch}/.
 // We only need the one matching the target.
 
@@ -130,7 +129,7 @@ function cleanupKoffi(nodeModulesDir, platform, arch) {
   return removed;
 }
 
-// ── Platform-specific: scoped native packages ────────────────────────────────
+// 鈹€鈹€ Platform-specific: scoped native packages 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 // Packages like @napi-rs/canvas-darwin-arm64, @img/sharp-linux-x64, etc.
 // Only the variant matching the target platform should survive.
 //
@@ -146,7 +145,7 @@ const PLATFORM_ALIASES = {
 };
 
 // Each regex MUST have capture group 1 = platform name and group 2 = arch name.
-// Compound arch suffixes (e.g. "x64-msvc", "arm64-gnu", "arm64-metal") are OK —
+// Compound arch suffixes (e.g. "x64-msvc", "arm64-gnu", "arm64-metal") are OK 鈥?
 // we strip the suffix after the first dash to get the base arch.
 const PLATFORM_NATIVE_SCOPES = {
   '@napi-rs': /^canvas-(darwin|linux|win32)-(x64|arm64)/,
@@ -169,7 +168,7 @@ const UNSCOPED_NATIVE_PACKAGES = [
 
 /**
  * Normalise the base arch from a potentially compound value.
- * e.g. "x64-msvc" → "x64", "arm64-gnu" → "arm64", "arm64-metal" → "arm64"
+ * e.g. "x64-msvc" 鈫?"x64", "arm64-gnu" 鈫?"arm64", "arm64-metal" 鈫?"arm64"
  */
 function baseArch(rawArch) {
   const dash = rawArch.indexOf('-');
@@ -308,7 +307,7 @@ exports.__test = {
   cleanupNodeModulesRuntimeJunk,
 };
 
-// ── Broken module patcher ─────────────────────────────────────────────────────
+// 鈹€鈹€ Broken module patcher 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 // Some bundled packages have transpiled CJS that sets `module.exports = exports.default`
 // without ever assigning `exports.default`, leaving module.exports === undefined.
 // This causes `TypeError: Cannot convert undefined or null to object` in Node.js 22+
@@ -389,15 +388,15 @@ function patchBrokenModules(nodeModulesDir) {
         };
         writeFileSync(hpaPkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
         count++;
-        console.log(`[after-pack] 🩹 Patched https-proxy-agent exports for CJS compatibility (require=${requireTarget})`);
+        console.log(`[after-pack] 馃┕ Patched https-proxy-agent exports for CJS compatibility (require=${requireTarget})`);
       }
     } catch (err) {
-      console.warn('[after-pack] ⚠️  Failed to patch https-proxy-agent:', err.message);
+      console.warn('[after-pack] 鈿狅笍  Failed to patch https-proxy-agent:', err.message);
     }
   }
 
   // lru-cache CJS/ESM interop fix (recursive):
-  // Multiple versions of lru-cache may exist in the output tree — not just
+  // Multiple versions of lru-cache may exist in the output tree 鈥?not just
   // at node_modules/lru-cache/ but also nested inside other packages.
   // Older CJS versions (v5, v6) export the class via `module.exports = LRUCache`
   // without a named `LRUCache` property, so `import { LRUCache } from 'lru-cache'`
@@ -424,7 +423,7 @@ function patchBrokenModules(nodeModulesDir) {
           if (!existsSync(normWin(pkgPath))) { stack.push(fullPath); continue; }
           try {
             const pkg = JSON.parse(readFileSync(normWin(pkgPath), 'utf8'));
-            if (pkg.type === 'module') continue; // ESM version — already has named exports
+            if (pkg.type === 'module') continue; // ESM version 鈥?already has named exports
             const mainFile = pkg.main || 'index.js';
             const entryFile = join(fullPath, mainFile);
             if (!existsSync(normWin(entryFile))) continue;
@@ -441,7 +440,7 @@ function patchBrokenModules(nodeModulesDir) {
               ].join('\n');
               writeFileSync(normWin(entryFile), patched, 'utf8');
               lruCount++;
-              console.log(`[after-pack] 🩹 Patched lru-cache CJS (v${pkg.version}) at ${relative(rootDir, fullPath)}`);
+              console.log(`[after-pack] 馃┕ Patched lru-cache CJS (v${pkg.version}) at ${relative(rootDir, fullPath)}`);
             }
 
             // lru-cache v7 ESM entry exports default only; add named export.
@@ -457,12 +456,12 @@ function patchBrokenModules(nodeModulesDir) {
                   const esmPatched = [esmOriginal, '', 'export { LRUCache }', ''].join('\n');
                   writeFileSync(normWin(esmEntry), esmPatched, 'utf8');
                   lruCount++;
-                  console.log(`[after-pack] 🩹 Patched lru-cache ESM (v${pkg.version}) at ${relative(rootDir, fullPath)}`);
+                  console.log(`[after-pack] 馃┕ Patched lru-cache ESM (v${pkg.version}) at ${relative(rootDir, fullPath)}`);
                 }
               }
             }
           } catch (err) {
-            console.warn(`[after-pack] ⚠️  Failed to patch lru-cache at ${fullPath}:`, err.message);
+            console.warn(`[after-pack] 鈿狅笍  Failed to patch lru-cache at ${fullPath}:`, err.message);
           }
         } else {
           stack.push(fullPath);
@@ -475,11 +474,11 @@ function patchBrokenModules(nodeModulesDir) {
   count += lruPatched;
 
   if (count > 0) {
-    console.log(`[after-pack] 🩹 Patched ${count} broken module(s) in ${nodeModulesDir}`);
+    console.log(`[after-pack] 馃┕ Patched ${count} broken module(s) in ${nodeModulesDir}`);
   }
 }
 
-// ── Plugin ID mismatch patcher ───────────────────────────────────────────────
+// 鈹€鈹€ Plugin ID mismatch patcher 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 // Some plugins (e.g. wecom) have a compiled JS entry that hardcodes a different
 // ID than what openclaw.plugin.json declares.  The Gateway rejects mismatches,
 // so we fix them after copying.
@@ -511,7 +510,7 @@ function patchPluginIds(pluginDir, expectedId) {
       if (replaced !== content) {
         content = replaced;
         patched = true;
-        console.log(`[after-pack] 🩹 Patching plugin ID in ${entry}: "${wrongId}" → "${correctId}"`);
+        console.log(`[after-pack] 馃┕ Patching plugin ID in ${entry}: "${wrongId}" 鈫?"${correctId}"`);
       }
     }
 
@@ -521,7 +520,7 @@ function patchPluginIds(pluginDir, expectedId) {
   }
 }
 
-// ── Plugin bundler ───────────────────────────────────────────────────────────
+// 鈹€鈹€ Plugin bundler 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 // Bundles a single OpenClaw plugin (and its transitive deps) from node_modules
 // directly into the packaged resources directory.  Mirrors the logic in
 // bundle-openclaw-plugins.mjs so the packaged app is self-contained even when
@@ -561,7 +560,7 @@ function listPkgs(nodeModulesDir) {
 function bundlePlugin(nodeModulesRoot, npmName, destDir) {
   const pkgPath = join(nodeModulesRoot, ...npmName.split('/'));
   if (!existsSync(pkgPath)) {
-    console.warn(`[after-pack] ⚠️  Plugin package not found: ${pkgPath}. Run pnpm install.`);
+    console.warn(`[after-pack] 鈿狅笍  Plugin package not found: ${pkgPath}. Run pnpm install.`);
     return false;
   }
 
@@ -579,7 +578,7 @@ function bundlePlugin(nodeModulesRoot, npmName, destDir) {
 
   const rootVirtualNM = getVirtualStoreNodeModules(realPluginPath);
   if (!rootVirtualNM) {
-    console.warn(`[after-pack] ⚠️  Could not find virtual store for ${npmName}, skipping deps.`);
+    console.warn(`[after-pack] 鈿狅笍  Could not find virtual store for ${npmName}, skipping deps.`);
     return true;
   }
   queue.push({ nodeModulesDir: rootVirtualNM, skipPkg: npmName });
@@ -630,11 +629,11 @@ function bundlePlugin(nodeModulesRoot, npmName, destDir) {
       console.warn(`[after-pack]   Skipped dep ${pkgName}: ${e.message}`);
     }
   }
-  console.log(`[after-pack] ✅ Plugin ${npmName}: copied ${count} deps to ${destDir}`);
+  console.log(`[after-pack] 鉁?Plugin ${npmName}: copied ${count} deps to ${destDir}`);
   return true;
 }
 
-// ── Main hook ────────────────────────────────────────────────────────────────
+// 鈹€鈹€ Main hook 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 exports.default = async function afterPack(context) {
   const appOutDir = context.appOutDir;
@@ -671,7 +670,7 @@ exports.default = async function afterPack(context) {
 
   console.log(`[after-pack] Copying ${depCount} openclaw dependencies to ${dest} ...`);
   cpSync(src, dest, { recursive: true });
-  console.log('[after-pack] ✅ openclaw node_modules copied.');
+  console.log('[after-pack] 鉁?openclaw node_modules copied.');
 
   const requiredBundledRuntimePackages = [
     ...ELECTRON_MAIN_RUNTIME_PACKAGES,
@@ -718,7 +717,7 @@ exports.default = async function afterPack(context) {
       if (existsSync(pluginNM)) {
         const pluginJunkRemoved = cleanupKnownRuntimeJunk(pluginDestDir, platform, arch);
         if (pluginJunkRemoved > 0) {
-          console.log(`[after-pack] ✅ ${pluginId}: removed ${pluginJunkRemoved} known runtime junk files/directories.`);
+          console.log(`[after-pack] 鉁?${pluginId}: removed ${pluginJunkRemoved} known runtime junk files/directories.`);
         }
         cleanupKoffi(pluginNM, platform, arch);
         cleanupNativePlatformPackages(pluginNM, platform, arch);
@@ -778,7 +777,7 @@ exports.default = async function afterPack(context) {
           }
 
           // Reuse the top-level openclaw/node_modules copy whenever possible:
-          //   - if src is missing, we have no reference version → trust top-level
+          //   - if src is missing, we have no reference version 鈫?trust top-level
           //     (Node's module resolution will walk up from
           //     dist/extensions/<ext>/<file>.js to openclaw/node_modules/ anyway).
           //   - if src exists and matches top-level version, we can safely share.
@@ -825,7 +824,7 @@ exports.default = async function afterPack(context) {
           const destPkg = join(dest, pkgEntry.name);
 
           if (pkgEntry.name.startsWith('@')) {
-            // Scoped package — iterate sub-entries
+            // Scoped package 鈥?iterate sub-entries
             for (const scopeEntry of readdirSync(srcPkg, { withFileTypes: true })) {
               if (!scopeEntry.isDirectory()) continue;
               const srcScoped = join(srcPkg, scopeEntry.name);
@@ -853,32 +852,32 @@ exports.default = async function afterPack(context) {
       }
     }
     if (extNMCount > 0) {
-      console.log(`[after-pack] ✅ Prepared node_modules for ${extNMCount} built-in extension(s), merged ${mergedPkgCount} packages into top-level${prunedSharedDepCount > 0 ? `, pruned ${prunedSharedDepCount} redundant direct deps on macOS` : ''}.`);
+      console.log(`[after-pack] 鉁?Prepared node_modules for ${extNMCount} built-in extension(s), merged ${mergedPkgCount} packages into top-level${prunedSharedDepCount > 0 ? `, pruned ${prunedSharedDepCount} redundant direct deps on macOS` : ''}.`);
     }
   }
 
   // 2. General cleanup on the full openclaw directory (not just node_modules)
-  console.log('[after-pack] 🧹 Cleaning up unnecessary files ...');
+  console.log('[after-pack] 馃Ч Cleaning up unnecessary files ...');
   const removedRoot = cleanupUnnecessaryFiles(openclawRoot);
   const removedKnownJunk = cleanupKnownRuntimeJunk(openclawRoot, platform, arch);
-  console.log(`[after-pack] ✅ Removed ${removedRoot + removedKnownJunk} unnecessary files/directories.`);
+  console.log(`[after-pack] 鉁?Removed ${removedRoot + removedKnownJunk} unnecessary files/directories.`);
 
   // 3. Platform-specific: strip koffi non-target platform binaries
   const koffiRemoved = cleanupKoffi(dest, platform, arch);
   if (koffiRemoved > 0) {
-    console.log(`[after-pack] ✅ koffi: removed ${koffiRemoved} non-target platform binaries (kept ${platform}_${arch}).`);
+    console.log(`[after-pack] 鉁?koffi: removed ${koffiRemoved} non-target platform binaries (kept ${platform}_${arch}).`);
   }
 
   // 4. Platform-specific: strip wrong-platform native packages
   const nativeRemoved = cleanupNativePlatformPackages(dest, platform, arch);
   if (nativeRemoved > 0) {
-    console.log(`[after-pack] ✅ Removed ${nativeRemoved} non-target native platform packages.`);
+    console.log(`[after-pack] 鉁?Removed ${nativeRemoved} non-target native platform packages.`);
   }
 
   // 5. Patch lru-cache in app.asar.unpacked
   //
-  // Production dependencies (electron-updater → semver → lru-cache@6,
-  // posthog-node → proxy agents → lru-cache@7, etc.) end up inside app.asar.
+  // Production dependencies (electron-updater 鈫?semver 鈫?lru-cache@6,
+  // posthog-node 鈫?proxy agents 鈫?lru-cache@7, etc.) end up inside app.asar.
   // Older CJS versions lack the `LRUCache` named export, breaking
   // `import { LRUCache }` in Electron 40+ (Node.js 22+ ESM interop).
   //
@@ -907,7 +906,7 @@ exports.default = async function afterPack(context) {
           if (!existsSync(normWin(pkgPath))) { lruStack.push(fullPath); continue; }
           try {
             const pkg = JSON.parse(readFS(normWin(pkgPath), 'utf8'));
-            if (pkg.type === 'module') continue; // ESM — already exports LRUCache
+            if (pkg.type === 'module') continue; // ESM 鈥?already exports LRUCache
             const mainFile = pkg.main || 'index.js';
             const entryFile = join(fullPath, mainFile);
             if (!existsSync(normWin(entryFile))) continue;
@@ -924,7 +923,7 @@ exports.default = async function afterPack(context) {
               ].join('\n');
               writeFS(normWin(entryFile), patched, 'utf8');
               asarLruCount++;
-              console.log(`[after-pack] 🩹 Patched lru-cache CJS (v${pkg.version}) in app.asar.unpacked at ${relative(asarUnpackedDir, fullPath)}`);
+              console.log(`[after-pack] 馃┕ Patched lru-cache CJS (v${pkg.version}) in app.asar.unpacked at ${relative(asarUnpackedDir, fullPath)}`);
             }
 
             // lru-cache v7 ESM entry exports default only; add named export.
@@ -940,12 +939,12 @@ exports.default = async function afterPack(context) {
                   const esmPatched = [esmOriginal, '', 'export { LRUCache }', ''].join('\n');
                   writeFS(normWin(esmEntry), esmPatched, 'utf8');
                   asarLruCount++;
-                  console.log(`[after-pack] 🩹 Patched lru-cache ESM (v${pkg.version}) in app.asar.unpacked at ${relative(asarUnpackedDir, fullPath)}`);
+                  console.log(`[after-pack] 馃┕ Patched lru-cache ESM (v${pkg.version}) in app.asar.unpacked at ${relative(asarUnpackedDir, fullPath)}`);
                 }
               }
             }
           } catch (err) {
-            console.warn(`[after-pack] ⚠️  Failed to patch lru-cache in asar.unpacked at ${fullPath}:`, err.message);
+            console.warn(`[after-pack] 鈿狅笍  Failed to patch lru-cache in asar.unpacked at ${fullPath}:`, err.message);
           }
         } else {
           lruStack.push(fullPath);
@@ -953,13 +952,7 @@ exports.default = async function afterPack(context) {
       }
     }
     if (asarLruCount > 0) {
-      console.log(`[after-pack] 🩹 Patched ${asarLruCount} lru-cache instance(s) in app.asar.unpacked`);
-    }
-  }
-  // 6. [Windows only] Ensure NSIS uses direct 7z extraction (also patched pre-build in package:win).
-  if (platform === 'win32') {
-    if (patchNsisExtractTemplate()) {
-      console.log('[after-pack] ⚡ NSIS extract template ready (direct 7z to $INSTDIR).');
+      console.log(`[after-pack] 馃┕ Patched ${asarLruCount} lru-cache instance(s) in app.asar.unpacked`);
     }
   }
 };
