@@ -151,6 +151,9 @@ export interface ProviderVendorInfo extends ProviderTypeInfo {
   supportedAuthModes: ProviderAuthMode[];
   defaultAuthMode: ProviderAuthMode;
   supportsMultipleAccounts: boolean;
+  providerConfig?: {
+    models?: Array<{ id: string; name?: string }>;
+  };
 }
 
 export interface ProviderAccount {

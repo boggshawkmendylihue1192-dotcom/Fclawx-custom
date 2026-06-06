@@ -1079,6 +1079,7 @@ function AgentModelModal({
   const { updateAgentModel, defaultModelRef } = useAgentsStore();
   const [selectedRuntimeProviderKey, setSelectedRuntimeProviderKey] = useState('');
   const [modelIdInput, setModelIdInput] = useState('');
+  const [manualModelEntry, setManualModelEntry] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
 
@@ -1097,6 +1098,7 @@ function AgentModelModal({
     if (override) {
       setSelectedRuntimeProviderKey(override.providerKey);
       setModelIdInput(override.modelId);
+      setManualModelEntry(false);
       return;
     }
 
@@ -1104,14 +1106,31 @@ function AgentModelModal({
     if (effective) {
       setSelectedRuntimeProviderKey(effective.providerKey);
       setModelIdInput(effective.modelId);
+      setManualModelEntry(false);
       return;
     }
 
     setSelectedRuntimeProviderKey(runtimeProviderOptions[0]?.runtimeProviderKey || '');
     setModelIdInput('');
+    setManualModelEntry(false);
   }, [agent.modelRef, agent.overrideModelRef, defaultModelRef, runtimeProviderOptions]);
 
   const selectedProvider = runtimeProviderOptions.find((option) => option.runtimeProviderKey === selectedRuntimeProviderKey) || null;
+  const selectedProviderModelOptions = selectedProvider?.modelOptions ?? [];
+  const selectedModelOption = selectedProviderModelOptions.find((option) => option.id === modelIdInput.trim()) || null;
+  useEffect(() => {
+    if (!selectedProvider) {
+      setManualModelEntry(false);
+      return;
+    }
+    const trimmed = modelIdInput.trim();
+    if (!trimmed) {
+      setManualModelEntry(false);
+      return;
+    }
+    setManualModelEntry(!selectedProvider.modelOptions.some((option) => option.id === trimmed));
+  }, [modelIdInput, selectedProvider]);
+
   const trimmedModelId = modelIdInput.trim();
   const nextModelRef = selectedRuntimeProviderKey && trimmedModelId
     ? `${selectedRuntimeProviderKey}/${trimmedModelId}`
@@ -1164,10 +1183,12 @@ function AgentModelModal({
     if (!parsedDefault) {
       setSelectedRuntimeProviderKey('');
       setModelIdInput('');
+      setManualModelEntry(false);
       return;
     }
     setSelectedRuntimeProviderKey(parsedDefault.providerKey);
     setModelIdInput(parsedDefault.modelId);
+    setManualModelEntry(false);
   };
 
   return (
@@ -1200,10 +1221,9 @@ function AgentModelModal({
               onChange={(event) => {
                 const nextProvider = event.target.value;
                 setSelectedRuntimeProviderKey(nextProvider);
-                if (!modelIdInput.trim()) {
-                  const option = runtimeProviderOptions.find((candidate) => candidate.runtimeProviderKey === nextProvider);
-                  setModelIdInput(option?.configuredModelId || '');
-                }
+                const option = runtimeProviderOptions.find((candidate) => candidate.runtimeProviderKey === nextProvider);
+                setModelIdInput(option?.modelOptions[0]?.id || option?.configuredModelId || '');
+                setManualModelEntry(false);
               }}
               className={selectClasses}
             >
@@ -1217,13 +1237,47 @@ function AgentModelModal({
           </div>
           <div className="space-y-2">
             <Label htmlFor="agent-model-id" className="text-xs text-foreground/70">{t('settingsDialog.modelIdLabel')}</Label>
-            <Input
+            <select
               id="agent-model-id"
-              value={modelIdInput}
-              onChange={(event) => setModelIdInput(event.target.value)}
-              placeholder={selectedProvider?.modelIdPlaceholder || selectedProvider?.configuredModelId || t('settingsDialog.modelIdPlaceholder')}
-              className={inputClasses}
-            />
+              value={manualModelEntry ? '__manual__' : modelIdInput}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (value === '__manual__') {
+                  setManualModelEntry(true);
+                  return;
+                }
+                setManualModelEntry(false);
+                setModelIdInput(value);
+              }}
+              className={selectClasses}
+            >
+              <option value="">{selectedProviderModelOptions.length > 0 ? '请选择模型' : '没有内置模型'}</option>
+              {selectedProviderModelOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label === option.id ? option.id : `${option.label} (${option.id})`}
+                </option>
+              ))}
+              <option value="__manual__">手动输入模型 ID...</option>
+            </select>
+            {manualModelEntry && (
+              <Input
+                value={modelIdInput}
+                onChange={(event) => setModelIdInput(event.target.value)}
+                placeholder={selectedProvider?.modelIdPlaceholder || selectedProvider?.configuredModelId || t('settingsDialog.modelIdPlaceholder')}
+                className={inputClasses}
+              />
+            )}
+            {selectedModelOption && (
+              <p className="text-xs text-foreground/50">
+                {selectedModelOption.source === 'configured'
+                  ? '当前账号配置的模型'
+                  : selectedModelOption.source === 'default'
+                    ? '厂商默认模型'
+                    : selectedModelOption.source === 'custom'
+                      ? '自定义模型'
+                      : '厂商内置模型'}
+              </p>
+            )}
           </div>
           {!!nextModelRef && (
             <p className="text-xs font-mono text-foreground/70 break-all">

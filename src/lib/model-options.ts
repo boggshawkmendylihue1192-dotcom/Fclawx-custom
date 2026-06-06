@@ -13,6 +13,13 @@ export interface RuntimeProviderOption {
   label: string;
   modelIdPlaceholder?: string;
   configuredModelId?: string;
+  modelOptions: RuntimeProviderModelOption[];
+}
+
+export interface RuntimeProviderModelOption {
+  id: string;
+  label: string;
+  source: 'configured' | 'custom' | 'default' | 'builtin';
 }
 
 export function resolveRuntimeProviderKey(account: ProviderAccount): string {
@@ -92,6 +99,7 @@ export function buildRuntimeProviderOptions(
         ? account.model.slice(runtimeProviderKey.length + 1)
         : account.model)
       : undefined;
+    const modelOptions = buildRuntimeProviderModelOptions(account, vendor, configuredModelId);
 
     deduped.set(runtimeProviderKey, {
       runtimeProviderKey,
@@ -99,10 +107,39 @@ export function buildRuntimeProviderOptions(
       label,
       modelIdPlaceholder: vendor?.modelIdPlaceholder,
       configuredModelId,
+      modelOptions,
     });
   }
 
   return [...deduped.values()];
+}
+
+function buildRuntimeProviderModelOptions(
+  account: ProviderAccount,
+  vendor: ProviderVendorInfo | undefined,
+  configuredModelId: string | undefined,
+): RuntimeProviderModelOption[] {
+  const options = new Map<string, RuntimeProviderModelOption>();
+  const add = (id: string | undefined, label: string | undefined, source: RuntimeProviderModelOption['source']) => {
+    const normalizedId = (id || '').trim();
+    if (!normalizedId || options.has(normalizedId)) return;
+    options.set(normalizedId, {
+      id: normalizedId,
+      label: (label || normalizedId).trim(),
+      source,
+    });
+  };
+
+  add(configuredModelId, configuredModelId, 'configured');
+  for (const customModel of account.metadata?.customModels ?? []) {
+    add(customModel, customModel, 'custom');
+  }
+  add(vendor?.defaultModelId, vendor?.defaultModelId, 'default');
+  for (const model of vendor?.providerConfig?.models ?? []) {
+    add(model.id, model.name || model.id, 'builtin');
+  }
+
+  return [...options.values()];
 }
 
 export function buildConfiguredModelOptions(
