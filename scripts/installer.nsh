@@ -25,6 +25,7 @@
 
 !macro customUnInstall
   SetDetailsView show
+  IfSilent keep_user_data
   MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 \
     "是否完全卸载 ClawX？$\r$\n$\r$\n选择“是”：删除软件本体、配置、聊天记录、模型密钥、渠道登录态、OpenClaw 运行数据。$\r$\n选择“否”：只删除软件本体，保留数据，重装后继续使用原配置。" \
     IDYES full_uninstall IDNO keep_user_data

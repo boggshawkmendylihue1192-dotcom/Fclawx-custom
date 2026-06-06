@@ -16,6 +16,11 @@
  * call instead of the "success" string expected by app-builder-lib. Accept
  * both success shapes; non-zero / non-success results still fail loudly.
  *
+ * Older ClawX uninstallers can return exit code 2 during assisted upgrades
+ * after the elevated/silent handoff even though the new installer can still
+ * safely overwrite the install directory. Treat that specific code as
+ * recoverable in the upgrade path instead of blocking the install.
+ *
  * Keep this as a build-time patch so reinstalling dependencies does not
  * silently reintroduce these installer bugs.
  */
@@ -69,6 +74,14 @@ for (const entry of readdirSync(pnpmDir, { withFileTypes: true })) {
   content = content.replace(
     '  ClearErrors\n  Exch $rootKey\n\n  Push 0',
     '  ClearErrors\n  Exch $rootKey\n  Pop $R9\n\n  Push 0',
+  );
+  content = content.replace(
+    '  ${if} $R0 != 0\r\n    MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0"\r\n    DetailPrint `Uninstall was not successful. Uninstaller error code: $R0.`\r\n    SetErrorLevel 2\r\n    Quit\r\n  ${endif}',
+    '  ${if} $R0 == 2\r\n    DetailPrint `Old uninstaller returned recoverable error code 2; continuing with overwrite install.`\r\n    Return\r\n  ${endif}\r\n\r\n  ${if} $R0 != 0\r\n    MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0"\r\n    DetailPrint `Uninstall was not successful. Uninstaller error code: $R0.`\r\n    SetErrorLevel 2\r\n    Quit\r\n  ${endif}',
+  );
+  content = content.replace(
+    '  ${if} $R0 != 0\n    MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0"\n    DetailPrint `Uninstall was not successful. Uninstaller error code: $R0.`\n    SetErrorLevel 2\n    Quit\n  ${endif}',
+    '  ${if} $R0 == 2\n    DetailPrint `Old uninstaller returned recoverable error code 2; continuing with overwrite install.`\n    Return\n  ${endif}\n\n  ${if} $R0 != 0\n    MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0"\n    DetailPrint `Uninstall was not successful. Uninstaller error code: $R0.`\n    SetErrorLevel 2\n    Quit\n  ${endif}',
   );
 
   if (content !== original) {

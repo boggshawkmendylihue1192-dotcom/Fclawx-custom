@@ -1,9 +1,10 @@
 appId: app.clawx.desktop
 productName: ClawX
 copyright: Copyright © 2026 ClawX
-# Keep the NSIS archive compressed. Uncompressed NSIS payloads can fail during
-# extraction on some Windows setups after elevation/multi-user handoff.
-compression: normal
+# Keep the NSIS archive uncompressed. ClawX already patches NSIS extraction
+# result handling, and store mode avoids very slow 7z recompression during
+# frequent custom builds and releases.
+compression: store
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 
 directories:
