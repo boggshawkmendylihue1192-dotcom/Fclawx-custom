@@ -1,9 +1,9 @@
 appId: app.clawx.desktop
 productName: ClawX
 copyright: Copyright © 2026 ClawX
-# Faster install/update extraction. ClawX carries a large OpenClaw bundle; NSIS
-# compression saves download size but makes update installation feel frozen.
-compression: store
+# Keep the NSIS archive compressed. Uncompressed NSIS payloads can fail during
+# extraction on some Windows setups after elevation/multi-user handoff.
+compression: normal
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 
 directories:

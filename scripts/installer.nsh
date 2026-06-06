@@ -11,12 +11,10 @@
 !macroend
 
 !macro customInit
-  SetDetailsView show
   DetailPrint "ClawX installer is ready. Existing versions will be removed before installing the new version."
 !macroend
 
 !macro customUnInit
-  SetDetailsView show
   DetailPrint "ClawX uninstaller is ready. Application files will be removed from the install directory."
 !macroend
 
