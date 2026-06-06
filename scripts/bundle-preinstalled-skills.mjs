@@ -92,6 +92,29 @@ function runCommand(command, args, options = {}) {
   });
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runCommandWithRetry(command, args, options = {}) {
+  const retries = options.retries ?? 3;
+  let lastError;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await runCommand(command, args, options);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= retries) break;
+      const waitMs = 1200 * attempt;
+      console.warn(`[preinstalled-skills] ${command} ${args.join(' ')} failed, retrying ${attempt}/${retries - 1} in ${waitMs}ms...`);
+      await delay(waitMs);
+    }
+  }
+
+  throw lastError;
+}
+
 async function extractArchive(archiveFileName, cwd) {
   try {
     await runCommand('tar', ['-xf', archiveFileName], { cwd });
@@ -114,9 +137,9 @@ async function fetchSparseRepo(repo, ref, paths, checkoutDir) {
   const archivePath = join(checkoutDir, archiveFileName);
   const archivePaths = [...new Set(paths.map(normalizeRepoPath))];
 
-  await runCommand('git', ['init', gitCheckoutDir]);
-  await runCommand('git', ['-C', gitCheckoutDir, 'remote', 'add', 'origin', remote]);
-  await runCommand('git', ['-C', gitCheckoutDir, 'fetch', '--depth', '1', 'origin', ref]);
+  await runCommandWithRetry('git', ['init', gitCheckoutDir]);
+  await runCommandWithRetry('git', ['-C', gitCheckoutDir, 'remote', 'add', 'origin', remote]);
+  await runCommandWithRetry('git', ['-C', gitCheckoutDir, 'fetch', '--depth', '1', 'origin', ref], { retries: 4 });
   // Do not checkout working tree on Windows: upstream repos may contain
   // Windows-invalid paths. Export only requested directories via git archive.
   await runCommand('git', ['-C', gitCheckoutDir, 'archive', '--format=tar', '--output', archiveFileName, 'FETCH_HEAD', ...archivePaths]);

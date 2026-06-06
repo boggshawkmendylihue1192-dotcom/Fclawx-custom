@@ -12,8 +12,12 @@
  *   Failed to decompress files. Please try running the installer again.
  *   SHELL_CONTEXT
  *
+ * Some Nsis7z builds also return "0" after a successful ExtractWithDetails
+ * call instead of the "success" string expected by app-builder-lib. Accept
+ * both success shapes; non-zero / non-success results still fail loudly.
+ *
  * Keep this as a build-time patch so reinstalling dependencies does not
- * silently reintroduce the installer bug.
+ * silently reintroduce these installer bugs.
  */
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -71,6 +75,39 @@ for (const entry of readdirSync(pnpmDir, { withFileTypes: true })) {
     writeFileSync(target, content, 'utf8');
     patched++;
     console.log(`[patch-electron-builder-nsis-stack] Patched ${target}`);
+  }
+
+  const extractTarget = join(
+    pnpmDir,
+    entry.name,
+    'node_modules',
+    'app-builder-lib',
+    'templates',
+    'nsis',
+    'include',
+    'extractAppPackage.nsh',
+  );
+
+  if (!existsSync(extractTarget)) {
+    continue;
+  }
+
+  content = readFileSync(extractTarget, 'utf8');
+  const extractOriginal = content;
+
+  content = content.replace(
+    '  Pop $R0\r\n  StrCmp $R0 "success" +3\r\n    MessageBox MB_OK|MB_ICONEXCLAMATION "$(decompressionFailed)$\\n$R0"\r\n    Quit',
+    '  Pop $R0\r\n  StrCmp $R0 "success" +4\r\n  StrCmp $R0 "0" +3\r\n    MessageBox MB_OK|MB_ICONEXCLAMATION "$(decompressionFailed)$\\n$R0"\r\n    Quit',
+  );
+  content = content.replace(
+    '  Pop $R0\n  StrCmp $R0 "success" +3\n    MessageBox MB_OK|MB_ICONEXCLAMATION "$(decompressionFailed)$\\n$R0"\n    Quit',
+    '  Pop $R0\n  StrCmp $R0 "success" +4\n  StrCmp $R0 "0" +3\n    MessageBox MB_OK|MB_ICONEXCLAMATION "$(decompressionFailed)$\\n$R0"\n    Quit',
+  );
+
+  if (content !== extractOriginal) {
+    writeFileSync(extractTarget, content, 'utf8');
+    patched++;
+    console.log(`[patch-electron-builder-nsis-stack] Patched ${extractTarget}`);
   }
 }
 
