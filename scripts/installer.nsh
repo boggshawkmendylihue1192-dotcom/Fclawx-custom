@@ -10,10 +10,22 @@
   ShowUninstDetails show
 !macroend
 
+!macro customInit
+  SetDetailsView show
+  DetailPrint "ClawX installer is ready. Existing versions will be removed before installing the new version."
+!macroend
+
+!macro customUnInit
+  SetDetailsView show
+  DetailPrint "ClawX uninstaller is ready. Application files will be removed from the install directory."
+!macroend
+
 !macro customInstall
+  SetDetailsView show
   DetailPrint "ClawX installation completed."
 !macroend
 
 !macro customUnInstall
+  SetDetailsView show
   DetailPrint "ClawX uninstallation completed."
 !macroend
