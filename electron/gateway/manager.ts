@@ -643,7 +643,12 @@ export class GatewayManager extends EventEmitter {
   async reload(): Promise<void> {
     await this.refreshReloadPolicy();
 
-    if (this.reloadPolicy.mode === 'off' || this.reloadPolicy.mode === 'restart') {
+    if (this.reloadPolicy.mode === 'off') {
+      logger.info('[gateway-refresh] mode=reload result=skipped policy=off');
+      return;
+    }
+
+    if (this.reloadPolicy.mode === 'restart') {
       logger.info(
         `[gateway-refresh] mode=reload result=policy_forced_restart policy=${this.reloadPolicy.mode}`,
       );
@@ -686,11 +691,10 @@ export class GatewayManager extends EventEmitter {
     }
 
     if (process.platform === 'win32') {
-      // Windows does not support SIGUSR1 for in-process reload.
-      // Fall back to a full restart.  The connectedForMs < 8000 guard above
-      // already skips unnecessary restarts for recently-started processes.
-      logger.warn('[gateway-refresh] mode=reload result=fallback_restart cause=windows');
-      await this.restart();
+      // Windows has no SIGUSR1 reload.  Do not turn ordinary config refreshes
+      // into process restarts: OpenClaw observes openclaw.json itself, and
+      // channel/plugin changes call debouncedRestart explicitly.
+      logger.info('[gateway-refresh] mode=reload result=skipped_windows_watch pid=' + this.process.pid);
       return;
     }
 
@@ -724,7 +728,11 @@ export class GatewayManager extends EventEmitter {
   debouncedReload(delayMs?: number): void {
     void this.refreshReloadPolicy();
     const effectiveDelay = delayMs ?? this.reloadPolicy.debounceMs;
-    if (this.reloadPolicy.mode === 'off' || this.reloadPolicy.mode === 'restart') {
+    if (this.reloadPolicy.mode === 'off') {
+      logger.debug(`Gateway reload policy=off; dropping debouncedReload request (${effectiveDelay}ms)`);
+      return;
+    }
+    if (this.reloadPolicy.mode === 'restart') {
       logger.debug(
         `Gateway reload policy=${this.reloadPolicy.mode}; routing debouncedReload to debouncedRestart (${effectiveDelay}ms)`,
       );

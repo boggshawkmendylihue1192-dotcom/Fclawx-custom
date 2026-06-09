@@ -8,7 +8,7 @@
  * equivalents could stall for 500 ms – 2 s+ per call, causing "Not
  * Responding" hangs.
  */
-import { access, mkdir, readFile, readdir, writeFile } from 'fs/promises';
+import { access, mkdir, readFile, readdir, writeFile, rename } from 'fs/promises';
 import { constants, readdirSync, readFileSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { homedir } from 'os';
@@ -307,8 +307,39 @@ async function readJsonFile<T>(filePath: string): Promise<T | null> {
 
 /** Write a JSON file, creating parent directories if needed. */
 async function writeJsonFile(filePath: string, data: unknown): Promise<void> {
-  await ensureDir(join(filePath, '..'));
-  await writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
+  await ensureDir(dirname(filePath));
+  const json = `${JSON.stringify(data, null, 2)}\n`;
+  const tempFile = join(
+    dirname(filePath),
+    `.${pathBasename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`,
+  );
+  await writeFile(tempFile, json, 'utf-8');
+  await replaceFileWithRetry(tempFile, filePath);
+}
+
+function pathBasename(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/');
+  return normalized.slice(normalized.lastIndexOf('/') + 1) || 'json';
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function replaceFileWithRetry(source: string, target: string): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await rename(source, target);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 4) {
+        await sleep(50 * (attempt + 1));
+      }
+    }
+  }
+  throw lastError;
 }
 
 // ── Types ────────────────────────────────────────────────────────
@@ -1659,13 +1690,12 @@ export async function ensureAnthropicMessagesModelMaxTokens(): Promise<string[]>
  */
 const OPENCLAW_PROVIDER_PINNED_AGENT_RUNTIME: Record<string, string> = {
   openai: 'pi',
-  'openai-codex': 'pi',
 };
 
 /** Runtime models.providers entry for OpenAI Codex OAuth accounts. */
 export const OPENAI_CODEX_OAUTH_PROVIDER_CONFIG = {
   baseUrl: 'https://api.openai.com/v1',
-  api: 'openai-codex-responses' as const,
+  api: 'openai-chatgpt-responses' as const,
 };
 
 function applyPinnedAgentRuntime(

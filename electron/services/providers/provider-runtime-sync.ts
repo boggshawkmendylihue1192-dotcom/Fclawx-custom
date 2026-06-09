@@ -25,7 +25,7 @@ import {
 import { logger } from '../../utils/logger';
 import { listAgentsSnapshot } from '../../utils/agent-config';
 
-const OPENAI_OAUTH_RUNTIME_PROVIDER = 'openai-codex';
+const OPENAI_OAUTH_RUNTIME_PROVIDER = 'openai';
 const OPENAI_OAUTH_DEFAULT_MODEL_REF = `${OPENAI_OAUTH_RUNTIME_PROVIDER}/gpt-5.5`;
 const XAI_OAUTH_RUNTIME_PROVIDER = 'xai';
 const XAI_OAUTH_DEFAULT_MODEL_REF = `${XAI_OAUTH_RUNTIME_PROVIDER}/grok-4.3`;
@@ -628,7 +628,7 @@ export async function syncDefaultProviderToRuntime(
   }
 
   // Self-heal: pin the embedded agent runtime for legacy OpenAI provider entries
-  // (`openai`, `openai-codex`) that would otherwise be auto-routed to the
+  // (`openai`) that would otherwise be auto-routed to the
   // unbundled `codex` harness. Running this before every default-provider switch
   // repairs on-disk config written by earlier ClawX builds.
   try {

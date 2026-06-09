@@ -1496,11 +1496,11 @@ function registerOpenClawHandlers(gatewayManager: GatewayManager): void {
     }
     if (forceRestartChannels.has(channelType)) {
       logger.info(`Scheduling Gateway restart after ${reason}`);
-      gatewayManager.debouncedRestart(150);
+      gatewayManager.debouncedRestart(1500);
       return;
     }
     logger.info(`Scheduling Gateway reload after ${reason}`);
-    gatewayManager.debouncedReload(150);
+    gatewayManager.debouncedReload(1500);
   };
 
   // Get OpenClaw package status

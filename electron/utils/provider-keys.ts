@@ -3,7 +3,7 @@ const MULTI_INSTANCE_PROVIDER_TYPES = new Set(['custom', 'ollama', 'litellm', 'l
 export const OPENCLAW_PROVIDER_KEY_MINIMAX = 'minimax-portal';
 export const OPENCLAW_PROVIDER_KEY_MOONSHOT = 'moonshot';
 export const OPENCLAW_PROVIDER_KEY_MOONSHOT_GLOBAL = 'moonshot-global';
-export const OPENAI_CODEX_RUNTIME_PROVIDER_KEY = 'openai-codex';
+export const OPENAI_CODEX_RUNTIME_PROVIDER_KEY = 'openai';
 export const XAI_RUNTIME_PROVIDER_KEY = 'xai';
 export const CLAWX_OPENAI_IMAGE_PROVIDER_KEY = 'clawx-openai-image';
 export const OAUTH_PROVIDER_TYPES = ['minimax-portal', 'minimax-portal-cn'] as const;
@@ -76,17 +76,9 @@ export function getAliasSourceTypes(openClawKey: string): string[] {
  */
 export function filterActiveProviderKeysForUi(
   activeKeys: Iterable<string>,
-  options?: { hasConfiguredOpenAiApiKey?: boolean },
+  _options?: { hasConfiguredOpenAiApiKey?: boolean },
 ): string[] {
-  const keys = Array.from(activeKeys).filter((key) => !HIDDEN_PROVIDER_KEYS_FOR_UI.has(key));
-  const active = new Set(keys);
-  if (!active.has('openai') || !active.has(OPENAI_CODEX_RUNTIME_PROVIDER_KEY)) {
-    return keys;
-  }
-  if (options?.hasConfiguredOpenAiApiKey) {
-    return keys;
-  }
-  return keys.filter((key) => key !== 'openai');
+  return Array.from(activeKeys).filter((key) => !HIDDEN_PROVIDER_KEYS_FOR_UI.has(key));
 }
 
 export function isOAuthProviderType(type: string): boolean {

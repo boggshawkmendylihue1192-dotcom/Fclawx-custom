@@ -7,13 +7,15 @@ import { getProviderService } from '../services/providers/provider-service';
 import { getSecretStore } from '../services/secrets/secret-store';
 import {
   ensureOpenClawProviderAgentRuntimePins,
+  OPENAI_CODEX_OAUTH_PROVIDER_CONFIG,
   saveOAuthTokenToOpenClaw,
   setOpenClawDefaultModel,
+  setOpenClawDefaultModelWithOverride,
 } from './openclaw-auth';
 
 export type BrowserOAuthProviderType = 'openai' | 'xai';
 
-const OPENAI_RUNTIME_PROVIDER_ID = 'openai-codex';
+const OPENAI_RUNTIME_PROVIDER_ID = 'openai';
 const OPENAI_OAUTH_DEFAULT_MODEL = 'gpt-5.5';
 const XAI_RUNTIME_PROVIDER_ID = 'xai';
 const XAI_OAUTH_DEFAULT_MODEL = 'grok-4.3';
@@ -231,7 +233,14 @@ class BrowserOAuthManager extends EventEmitter {
       ));
 
     try {
-      await setOpenClawDefaultModel(runtimeProviderId, modelRef, fallbackModelRefs);
+      if (providerType === 'openai') {
+        await setOpenClawDefaultModelWithOverride(runtimeProviderId, modelRef, {
+          baseUrl: OPENAI_CODEX_OAUTH_PROVIDER_CONFIG.baseUrl,
+          api: OPENAI_CODEX_OAUTH_PROVIDER_CONFIG.api,
+        }, fallbackModelRefs);
+      } else {
+        await setOpenClawDefaultModel(runtimeProviderId, modelRef, fallbackModelRefs);
+      }
       await ensureOpenClawProviderAgentRuntimePins();
       logger.info(`[BrowserOAuth] Registered ${runtimeProviderId} in openclaw.json (default model: ${modelRef})`);
     } catch (err) {

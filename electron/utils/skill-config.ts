@@ -5,17 +5,15 @@
  *
  * All file I/O uses async fs/promises to avoid blocking the main thread.
  */
-import { readFile, writeFile, access, mkdir } from 'fs/promises';
+import { readFile, writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
-import { constants } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { getOpenClawDir, getResourcesDir } from './paths';
 import { logger } from './logger';
 import { cpAsyncSafe } from './plugin-install';
 import { withConfigLock } from './config-mutex';
-
-const OPENCLAW_CONFIG_PATH = join(homedir(), '.openclaw', 'openclaw.json');
+import { readOpenClawConfig, writeOpenClawConfig } from './channel-config';
 
 interface SkillEntry {
     enabled?: boolean;
@@ -57,32 +55,18 @@ interface PreinstalledMarker {
     installedAt: string;
 }
 
-async function fileExists(p: string): Promise<boolean> {
-    try { await access(p, constants.F_OK); return true; } catch { return false; }
-}
-
 /**
  * Read the current OpenClaw config
  */
 async function readConfig(): Promise<OpenClawConfig> {
-    if (!(await fileExists(OPENCLAW_CONFIG_PATH))) {
-        return {};
-    }
-    try {
-        const raw = await readFile(OPENCLAW_CONFIG_PATH, 'utf-8');
-        return JSON.parse(raw);
-    } catch (err) {
-        console.error('Failed to read openclaw config:', err);
-        return {};
-    }
+    return await readOpenClawConfig() as OpenClawConfig;
 }
 
 /**
  * Write the OpenClaw config
  */
 async function writeConfig(config: OpenClawConfig): Promise<void> {
-    const json = JSON.stringify(config, null, 2);
-    await writeFile(OPENCLAW_CONFIG_PATH, json, 'utf-8');
+    await writeOpenClawConfig(config);
 }
 
 async function setSkillsEnabled(skillKeys: string[], enabled: boolean): Promise<void> {

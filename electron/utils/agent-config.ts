@@ -8,6 +8,7 @@ import { expandPath, getOpenClawConfigDir } from './paths';
 import * as logger from './logger';
 import { toUiChannelType } from './channel-alias';
 import { ensureClawXAgentIdentityFile, ensureClawXIdentityFile } from './openclaw-workspace';
+import { getProviderConfig } from './provider-registry';
 
 const MAIN_AGENT_ID = 'main';
 const MAIN_AGENT_NAME = 'Main Agent';
@@ -1181,15 +1182,54 @@ function isRegisteredProviderModel(config: AgentConfigDocument, modelRef: string
   });
 }
 
-function assertRegisteredProviderModel(config: AgentConfigDocument, modelRef: string): void {
-  if (!isRegisteredProviderModel(config, modelRef)) {
-    const parsed = splitModelRef(modelRef);
-    throw new Error(
-      parsed
-        ? `Model "${modelRef}" is not registered. Configure provider "${parsed.provider}" and add model "${parsed.modelId}" before selecting it.`
-        : 'modelRef must be in "provider/model" format',
-    );
+function ensureProviderModelRegistered(config: AgentConfigDocument, modelRef: string): void {
+  const parsed = splitModelRef(modelRef);
+  if (!parsed) {
+    throw new Error('modelRef must be in "provider/model" format');
   }
+
+  const models = config.models && typeof config.models === 'object' && !Array.isArray(config.models)
+    ? config.models as Record<string, unknown>
+    : {};
+  const providers = models.providers && typeof models.providers === 'object' && !Array.isArray(models.providers)
+    ? models.providers as Record<string, unknown>
+    : {};
+  const registryConfig = getProviderConfig(parsed.provider);
+  const existingProvider = providers[parsed.provider];
+  const providerConfig = existingProvider && typeof existingProvider === 'object' && !Array.isArray(existingProvider)
+    ? existingProvider as Record<string, unknown>
+    : registryConfig
+      ? {
+        baseUrl: registryConfig.baseUrl,
+        api: registryConfig.api,
+        apiKey: registryConfig.apiKeyEnv,
+        ...(registryConfig.headers ? { headers: registryConfig.headers } : {}),
+      }
+      : null;
+
+  if (!providerConfig) {
+    throw new Error(`Provider "${parsed.provider}" is not configured. Configure provider "${parsed.provider}" before selecting "${modelRef}".`);
+  }
+
+  if (!Array.isArray(providerConfig.models)) {
+    const registryModels = registryConfig?.models?.map((model) => ({ ...model })) ?? [];
+    const modelEntry = registryModels.find((model) => model.id === parsed.modelId)
+      ?? { id: parsed.modelId, name: parsed.modelId };
+    providerConfig.models = [
+      ...registryModels.filter((model) => model.id !== parsed.modelId),
+      modelEntry,
+    ];
+  } else if (!isRegisteredProviderModel(config, modelRef)) {
+    const registryModel = registryConfig?.models?.find((model) => model.id === parsed.modelId);
+    providerConfig.models = [
+      ...providerConfig.models,
+      registryModel ? { ...registryModel } : { id: parsed.modelId, name: parsed.modelId },
+    ];
+  }
+
+  providers[parsed.provider] = providerConfig;
+  models.providers = providers;
+  config.models = models;
 }
 
 function ensureAllowedModel(defaults: AgentDefaultsConfig, modelRef: string): void {
@@ -1224,7 +1264,7 @@ export async function updateAgentModel(agentId: string, modelRef: string | null)
       if (!isValidModelRef(normalizedModelRef)) {
         throw new Error('modelRef must be in "provider/model" format');
       }
-      assertRegisteredProviderModel(config, normalizedModelRef);
+      ensureProviderModelRegistered(config, normalizedModelRef);
       nextEntry.model = { primary: normalizedModelRef };
       const defaults = (agentsConfig.defaults && typeof agentsConfig.defaults === 'object'
         ? { ...agentsConfig.defaults }
@@ -1256,7 +1296,7 @@ export async function ensureModelAllowed(modelRef: string): Promise<AgentsSnapsh
     }
 
     const config = await readOpenClawConfig() as AgentConfigDocument;
-    assertRegisteredProviderModel(config, normalizedModelRef);
+    ensureProviderModelRegistered(config, normalizedModelRef);
     const { agentsConfig } = normalizeAgentsConfig(config);
     const defaults = (agentsConfig.defaults && typeof agentsConfig.defaults === 'object'
       ? { ...agentsConfig.defaults }

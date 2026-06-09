@@ -255,7 +255,7 @@ export async function handleProviderRoutes(
     try {
       const existing = await providerService.getAccount(accountId);
       const runtimeProviderKey = existing?.authMode === 'oauth_browser'
-        ? (existing.vendorId === 'openai' ? 'openai-codex' : existing.vendorId === 'xai' ? 'xai' : undefined)
+        ? (existing.vendorId === 'openai' ? 'openai' : existing.vendorId === 'xai' ? 'xai' : undefined)
         : undefined;
       if (url.searchParams.get('apiKeyOnly') === '1') {
         await providerService._deleteProviderApiKeyInternal(accountId);

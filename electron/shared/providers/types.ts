@@ -92,9 +92,10 @@ export const OLLAMA_PLACEHOLDER_API_KEY = 'ollama-local';
 export const OPENCLAW_API_PROTOCOLS = [
   'openai-completions',
   'openai-responses',
-  'openai-codex-responses',
+  'openai-chatgpt-responses',
   'anthropic-messages',
   'google-generative-ai',
+  'google-vertex',
   'github-copilot',
   'bedrock-converse-stream',
   'ollama',

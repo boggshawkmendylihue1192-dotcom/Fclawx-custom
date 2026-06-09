@@ -4,7 +4,7 @@
  *
  * All file I/O uses async fs/promises to avoid blocking the main thread.
  */
-import { access, mkdir, readFile, writeFile, readdir, stat, rm } from 'fs/promises';
+import { access, mkdir, readFile, writeFile, readdir, stat, rm, rename } from 'fs/promises';
 import { constants } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
@@ -461,6 +461,26 @@ async function ensureConfigDir(): Promise<void> {
     }
 }
 
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function replaceFileWithRetry(source: string, target: string): Promise<void> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+        try {
+            await rename(source, target);
+            return;
+        } catch (error) {
+            lastError = error;
+            if (attempt < 4) {
+                await sleep(50 * (attempt + 1));
+            }
+        }
+    }
+    throw lastError;
+}
+
 export async function readOpenClawConfig(): Promise<OpenClawConfig> {
     await ensureConfigDir();
 
@@ -468,14 +488,23 @@ export async function readOpenClawConfig(): Promise<OpenClawConfig> {
         return {};
     }
 
-    try {
-        const content = await readFile(CONFIG_FILE, 'utf-8');
-        return JSON.parse(content) as OpenClawConfig;
-    } catch (error) {
-        logger.error('Failed to read OpenClaw config', error);
-        console.error('Failed to read OpenClaw config:', error);
-        return {};
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+        try {
+            const content = await readFile(CONFIG_FILE, 'utf-8');
+            return JSON.parse(content) as OpenClawConfig;
+        } catch (error) {
+            lastError = error;
+            if (attempt < 3) {
+                await sleep(40 * (attempt + 1));
+                continue;
+            }
+        }
     }
+
+    logger.error('Failed to read OpenClaw config', lastError);
+    console.error('Failed to read OpenClaw config:', lastError);
+    return {};
 }
 
 export async function writeOpenClawConfig(config: OpenClawConfig): Promise<void> {
@@ -490,7 +519,13 @@ export async function writeOpenClawConfig(config: OpenClawConfig): Promise<void>
         commands.restart = true;
         config.commands = commands;
 
-        await writeFile(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
+        const json = `${JSON.stringify(config, null, 2)}\n`;
+        const tempFile = join(
+            OPENCLAW_DIR,
+            `.openclaw.json.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`,
+        );
+        await writeFile(tempFile, json, 'utf-8');
+        await replaceFileWithRetry(tempFile, CONFIG_FILE);
     } catch (error) {
         logger.error('Failed to write OpenClaw config', error);
         console.error('Failed to write OpenClaw config:', error);

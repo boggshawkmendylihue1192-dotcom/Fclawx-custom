@@ -276,10 +276,10 @@ function scheduleGatewayChannelSaveRefresh(
     return { mode: 'none', reason };
   }
   if (FORCE_RESTART_CHANNELS.has(storedChannelType)) {
-    ctx.gatewayManager.debouncedRestart(150);
+    ctx.gatewayManager.debouncedRestart(1500);
     return { mode: 'restart', reason };
   }
-  ctx.gatewayManager.debouncedReload(150);
+  ctx.gatewayManager.debouncedReload(1500);
   return { mode: 'reload', reason };
 }
 
@@ -1616,8 +1616,7 @@ export async function handleChannelRoutes(
       const existingValues = await getChannelFormValues(body.channelType, body.accountId);
       if (isSameConfigValues(existingValues, body.config)) {
         await ensureScopedChannelBinding(body.channelType, body.accountId);
-        scheduleGatewayChannelSaveRefresh(ctx, storedChannelType, `channel:saveConfigNoChange:${storedChannelType}`);
-        sendJson(res, 200, { success: true, noChange: true });
+        sendJson(res, 200, { success: true, noChange: true, refresh: { mode: 'none', reason: `channel:saveConfigNoChange:${storedChannelType}` } });
         return true;
       }
       await saveChannelConfig(body.channelType, body.config, body.accountId);
