@@ -7,6 +7,7 @@ import { getProviderConfig, getProviderDefaultModel } from '../../utils/provider
 import {
   ensureAnthropicMessagesModelMaxTokens,
   ensureOpenClawProviderAgentRuntimePins,
+  OPENAI_CODEX_OAUTH_PROVIDER_CONFIG,
   pruneInvalidApiProviderEntries,
   removeProviderFromOpenClaw,
   removeProviderKeyFromOpenClaw,
@@ -535,7 +536,14 @@ export async function syncUpdatedProviderToRuntime(
     const modelOverride = config.model ? `${ock}/${config.model}` : undefined;
     const browserOAuthRuntimeProvider = await getBrowserOAuthRuntimeProvider(config);
     if (browserOAuthRuntimeProvider) {
-      await setOpenClawDefaultModel(browserOAuthRuntimeProvider, modelOverride, fallbackModels);
+      if (browserOAuthRuntimeProvider === OPENAI_OAUTH_RUNTIME_PROVIDER) {
+        await setOpenClawDefaultModelWithOverride(browserOAuthRuntimeProvider, modelOverride, {
+          baseUrl: OPENAI_CODEX_OAUTH_PROVIDER_CONFIG.baseUrl,
+          api: OPENAI_CODEX_OAUTH_PROVIDER_CONFIG.api,
+        }, fallbackModels);
+      } else {
+        await setOpenClawDefaultModel(browserOAuthRuntimeProvider, modelOverride, fallbackModels);
+      }
     } else
     if (!isUnregisteredProviderType(config.type)) {
       if (shouldUseExplicitDefaultOverride(config, ock)) {

@@ -1,6 +1,7 @@
 import type { ProviderAccount, ProviderConfig, ProviderType } from '../../shared/providers/types';
 import { getProviderDefinition } from '../../shared/providers/registry';
 import { getClawXProviderStore } from './store-instance';
+import { getProviderSecret } from '../secrets/secret-store';
 
 
 function inferAuthMode(type: ProviderType): ProviderAccount['authMode'] {
@@ -60,20 +61,73 @@ export function providerAccountToConfig(account: ProviderAccount): ProviderConfi
 export async function listProviderAccounts(): Promise<ProviderAccount[]> {
   const store = await getClawXProviderStore();
   const accounts = store.get('providerAccounts') as Record<string, ProviderAccount> | undefined;
-  return Object.values(accounts ?? {});
+  const nextAccounts = { ...(accounts ?? {}) };
+  let modified = false;
+  const result: ProviderAccount[] = [];
+
+  for (const account of Object.values(nextAccounts)) {
+    const healed = await healAccountAuthModeFromSecret(account);
+    result.push(healed);
+    if (healed !== account) {
+      nextAccounts[account.id] = healed;
+      modified = true;
+    }
+  }
+
+  if (modified) {
+    store.set('providerAccounts', nextAccounts);
+  }
+
+  return result;
 }
 
 export async function getProviderAccount(accountId: string): Promise<ProviderAccount | null> {
   const store = await getClawXProviderStore();
   const accounts = store.get('providerAccounts') as Record<string, ProviderAccount> | undefined;
-  return accounts?.[accountId] ?? null;
+  const account = accounts?.[accountId] ?? null;
+  if (!account) return null;
+
+  const healed = await healAccountAuthModeFromSecret(account);
+  if (healed !== account) {
+    const nextAccounts = { ...(accounts ?? {}), [accountId]: healed };
+    store.set('providerAccounts', nextAccounts);
+  }
+  return healed;
 }
 
 export async function saveProviderAccount(account: ProviderAccount): Promise<void> {
   const store = await getClawXProviderStore();
   const accounts = (store.get('providerAccounts') ?? {}) as Record<string, ProviderAccount>;
-  accounts[account.id] = account;
+  accounts[account.id] = await healAccountAuthModeFromSecret(account);
   store.set('providerAccounts', accounts);
+}
+
+async function healAccountAuthModeFromSecret(account: ProviderAccount): Promise<ProviderAccount> {
+  const secret = await getProviderSecret(account.id);
+  if (!secret) {
+    return account;
+  }
+
+  let nextAuthMode: ProviderAccount['authMode'] | undefined;
+  if (secret.type === 'oauth') {
+    nextAuthMode = account.vendorId === 'minimax-portal' || account.vendorId === 'minimax-portal-cn'
+      ? 'oauth_device'
+      : 'oauth_browser';
+  } else if (secret.type === 'local') {
+    nextAuthMode = 'local';
+  } else if (secret.type === 'api_key') {
+    nextAuthMode = 'api_key';
+  }
+
+  if (!nextAuthMode || account.authMode === nextAuthMode) {
+    return account;
+  }
+
+  return {
+    ...account,
+    authMode: nextAuthMode,
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 export async function deleteProviderAccount(accountId: string): Promise<void> {
